@@ -1,0 +1,47 @@
+services:
+    _defaults:
+        autowire: true
+        autoconfigure: true
+        public: false
+
+    # Public services
+    Phillarmonic\AllegroRedisOdmBundle\DocumentManager:
+        alias: 'allegro_redis_odm.document_manager'
+        public: true
+
+    # The Redis client will be configured by the extension based on configuration
+    allegro_redis_odm.client:
+        class: Redis  # This will be replaced based on configuration
+        public: false
+
+    allegro_redis_odm.document_manager:
+        class: Phillarmonic\AllegroRedisOdmBundle\DocumentManager
+        arguments:
+            - '@allegro_redis_odm.client'  # Will be replaced with client adapter
+            - '@allegro_redis_odm.metadata_factory'
+            - '@allegro_redis_odm.hydrator'
+        public: true
+
+    allegro_redis_odm.metadata_factory:
+        class: Phillarmonic\AllegroRedisOdmBundle\Mapping\MetadataFactory
+        arguments:
+            - null  # Replace annotation_reader with null
+            - '%allegro_redis_odm.mappings%'
+        public: false
+
+    allegro_redis_odm.hydrator:
+        class: Phillarmonic\AllegroRedisOdmBundle\Hydrator\Hydrator
+        arguments:
+            - '@allegro_redis_odm.metadata_factory'
+        public: false
+
+    allegro_redis_odm.repository_factory:
+        class: Phillarmonic\AllegroRedisOdmBundle\Repository\RepositoryFactory
+        arguments:
+            - '@allegro_redis_odm.document_manager'
+        public: false
+
+    # Import mapping attributes as services
+    Phillarmonic\AllegroRedisOdmBundle\Mapping\:
+        resource: '../../Mapping/*'
+        exclude: '../../Mapping/{ClassMetadata.php}'

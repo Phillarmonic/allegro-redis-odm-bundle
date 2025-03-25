@@ -1,0 +1,44 @@
+{
+    "name": "phillarmonic/allegro-redis-odm-bundle",
+    "description": "Redis ODM (Object Document Mapper) for Symfony - store and retrieve PHP objects using Redis",
+    "type": "symfony-bundle",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Phillarmonic Team",
+            "homepage": "https://github.com/phillarmonic"
+        }
+    ],
+    "require": {
+        "php": ">=8.2",
+        "doctrine/doctrine-bundle": "^2.14",
+        "doctrine/orm": "^3.3",
+        "symfony/config": "^6.0|^7.0",
+        "symfony/dependency-injection": "^6.0|^7.0",
+        "symfony/framework-bundle": "^6.0|^7.0"
+    },
+    "require-dev": {
+        "roave/security-advisories": "dev-latest",
+        "phpunit/phpunit": "^9.5|^10.0",
+        "symfony/phpunit-bridge": "^6.0|^7.0"
+    },
+    "suggest": {
+        "ext-redis": "Required for using the phpredis adapter",
+        "predis/predis": "Required for using the predis adapter"
+    },
+    "autoload": {
+        "psr-4": {
+            "Phillarmonic\\AllegroRedisOdmBundle\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Phillarmonic\\AllegroRedisOdmBundle\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
