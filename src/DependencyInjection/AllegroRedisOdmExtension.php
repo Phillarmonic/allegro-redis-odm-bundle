@@ -49,7 +49,53 @@ class AllegroRedisOdmExtension extends Extension
         // Create the appropriate client based on configuration
         if ($clientType === 'phpredis') {
             $clientDef = new Definition(\Redis::class);
-            $clientDef->addMethodCall('connect', [$connection['host'], $connection['port']]);
+
+            // For phpredis, we need to use different methods depending on the scheme
+            $isTls = $connection['scheme'] === 'rediss';
+
+            if (!empty($connection['persistent'])) {
+                // Configure pconnect options
+                $connectMethod = $isTls ? 'pconnect' : 'pconnect';
+
+                if ($isTls) {
+                    // SSL connection options for persistent connection
+                    $clientDef->addMethodCall($connectMethod, [
+                        $connection['host'],
+                        $connection['port'],
+                        0.0, // default timeout
+                        null, // persistent_id
+                        0, // retry_interval
+                        ['verify_peer' => true, 'verify_peer_name' => true] // TLS options
+                    ]);
+                } else {
+                    // Standard connection
+                    $clientDef->addMethodCall($connectMethod, [
+                        $connection['host'],
+                        $connection['port']
+                    ]);
+                }
+            } else {
+                // Configure connect options
+                $connectMethod = $isTls ? 'connect' : 'connect';
+
+                if ($isTls) {
+                    // SSL connection options for non-persistent connection
+                    $clientDef->addMethodCall($connectMethod, [
+                        $connection['host'],
+                        $connection['port'],
+                        0.0, // default timeout
+                        null, // persistent_id
+                        0, // retry_interval
+                        ['verify_peer' => true, 'verify_peer_name' => true] // TLS options
+                    ]);
+                } else {
+                    // Standard connection
+                    $clientDef->addMethodCall($connectMethod, [
+                        $connection['host'],
+                        $connection['port']
+                    ]);
+                }
+            }
 
             if (!empty($connection['auth'])) {
                 $clientDef->addMethodCall('auth', [$connection['auth']]);
@@ -63,16 +109,12 @@ class AllegroRedisOdmExtension extends Extension
                 $clientDef->addMethodCall('setOption', [\Redis::OPT_READ_TIMEOUT, $connection['read_timeout']]);
             }
 
-            if (!empty($connection['persistent'])) {
-                $clientDef->addMethodCall('pconnect', [$connection['host'], $connection['port']]);
-            }
-
             $container->setDefinition('allegro_redis_odm.client', $clientDef);
         } elseif ($clientType === 'predis') {
             $clientDef = new Definition('Predis\Client');
 
             $parameters = [
-                'scheme' => 'tcp',
+                'scheme' => $connection['scheme'], // Use the configured scheme directly
                 'host' => $connection['host'],
                 'port' => $connection['port']
             ];
@@ -90,6 +132,14 @@ class AllegroRedisOdmExtension extends Extension
             }
 
             $options = [];
+
+            // If using SSL/TLS, add additional configuration options
+            if ($connection['scheme'] === 'rediss') {
+                $options['ssl'] = [
+                    'verify_peer' => true,
+                    'verify_peer_name' => true
+                ];
+            }
 
             $clientDef->setArguments([$parameters, $options]);
             $container->setDefinition('allegro_redis_odm.client', $clientDef);
