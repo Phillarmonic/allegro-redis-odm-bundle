@@ -29,6 +29,21 @@ class RedisClientAdapter
     }
 
     /**
+     * Helper method to handle Redis result values that might be Redis objects
+     *
+     * @param mixed $result The result from a Redis command
+     * @param mixed $successValue The value to return on success
+     * @return mixed Normalized result
+     */
+    private function handleRedisResult($result, $successValue)
+    {
+        if (is_object($result) && $result instanceof \Redis) {
+            return $successValue;
+        }
+        return $result;
+    }
+
+    /**
      * Get the underlying Redis client
      *
      * @return object
@@ -46,7 +61,8 @@ class RedisClientAdapter
      */
     public function hGetAll(string $key): array
     {
-        return $this->client->hGetAll($key);
+        $result = $this->client->hGetAll($key);
+        return is_array($result) ? $result : [];
     }
 
     /**
@@ -58,12 +74,18 @@ class RedisClientAdapter
      */
     public function hMSet(string $key, array $dictionary): bool
     {
-        if ($this->clientType === 'phpredis') {
-            return $this->client->hMSet($key, $dictionary);
-        } else {
-            // Predis returns the client for fluent interface
-            $result = $this->client->hmset($key, $dictionary);
-            return $result == 'OK' || $result === true;
+        try {
+            if ($this->clientType === 'phpredis') {
+                $result = $this->handleRedisResult($this->client->hMSet($key, $dictionary), true);
+                return (bool)$result;
+            } else {
+                // Predis returns the client for fluent interface
+                $result = $this->client->hmset($key, $dictionary);
+                return $result == 'OK' || $result === true;
+            }
+        } catch (\Exception $e) {
+            error_log('Error in hMSet: ' . $e->getMessage());
+            return false;
         }
     }
 
@@ -88,20 +110,27 @@ class RedisClientAdapter
      */
     public function set(string $key, string $value, $expireResolution = null): bool
     {
-        if ($expireResolution === null) {
-            if ($this->clientType === 'phpredis') {
-                return $this->client->set($key, $value);
+        try {
+            if ($expireResolution === null) {
+                if ($this->clientType === 'phpredis') {
+                    $result = $this->handleRedisResult($this->client->set($key, $value), true);
+                    return (bool)$result;
+                } else {
+                    $result = $this->client->set($key, $value);
+                    return $result == 'OK' || $result === true;
+                }
             } else {
-                $result = $this->client->set($key, $value);
-                return $result == 'OK' || $result === true;
+                if ($this->clientType === 'phpredis') {
+                    $result = $this->handleRedisResult($this->client->set($key, $value, $expireResolution), true);
+                    return (bool)$result;
+                } else {
+                    $result = $this->client->set($key, $value, 'EX', $expireResolution);
+                    return $result == 'OK' || $result === true;
+                }
             }
-        } else {
-            if ($this->clientType === 'phpredis') {
-                return $this->client->set($key, $value, $expireResolution);
-            } else {
-                $result = $this->client->set($key, $value, 'EX', $expireResolution);
-                return $result == 'OK' || $result === true;
-            }
+        } catch (\Exception $e) {
+            error_log('Error in set: ' . $e->getMessage());
+            return false;
         }
     }
 
@@ -113,7 +142,16 @@ class RedisClientAdapter
      */
     public function del($key): int
     {
-        return $this->client->del($key);
+        try {
+            $result = $this->client->del($key);
+            if (is_object($result) && $result instanceof \Redis) {
+                return 1; // Assume at least one key was deleted
+            }
+            return is_int($result) ? $result : (int)$result;
+        } catch (\Exception $e) {
+            error_log('Error in del: ' . $e->getMessage());
+            return 0;
+        }
     }
 
     /**
@@ -125,7 +163,13 @@ class RedisClientAdapter
      */
     public function expire(string $key, int $ttl): bool
     {
-        return (bool)$this->client->expire($key, $ttl);
+        try {
+            $result = $this->handleRedisResult($this->client->expire($key, $ttl), true);
+            return (bool)$result;
+        } catch (\Exception $e) {
+            error_log('Error in expire: ' . $e->getMessage());
+            return false;
+        }
     }
 
     /**
@@ -136,7 +180,13 @@ class RedisClientAdapter
      */
     public function keys(string $pattern): array
     {
-        return $this->client->keys($pattern);
+        try {
+            $result = $this->client->keys($pattern);
+            return is_array($result) ? $result : [];
+        } catch (\Exception $e) {
+            error_log('Error in keys: ' . $e->getMessage());
+            return [];
+        }
     }
 
     /**
@@ -146,7 +196,11 @@ class RedisClientAdapter
      */
     public function multi()
     {
-        $this->client->multi();
+        try {
+            $this->client->multi();
+        } catch (\Exception $e) {
+            error_log('Error starting Redis transaction: ' . $e->getMessage());
+        }
         return $this;
     }
 
@@ -157,7 +211,20 @@ class RedisClientAdapter
      */
     public function exec(): array
     {
-        return $this->client->exec();
+        try {
+            $result = $this->client->exec();
+
+            // Handle the case when exec fails or returns false
+            if ($result === false) {
+                error_log('Redis transaction execution failed');
+                return [];
+            }
+
+            return is_array($result) ? $result : [];
+        } catch (\Exception $e) {
+            error_log('Error executing Redis transaction: ' . $e->getMessage());
+            return [];
+        }
     }
 
     /**
@@ -171,16 +238,7 @@ class RedisClientAdapter
     {
         try {
             if ($this->clientType === 'phpredis') {
-                // Direct approach without transaction
-                $result = $this->client->sAdd($key, ...$values);
-
-                // Handle the case when the client object is returned
-                if (is_object($result) && $result instanceof \Redis) {
-                    // Try to get the cardinality of the set after addition to approximate the result
-                    $cardinality = $this->client->sCard($key);
-                    return is_int($cardinality) ? 1 : 0; // Return at least 1 if we can get the cardinality
-                }
-
+                $result = $this->handleRedisResult($this->client->sAdd($key, ...$values), count($values));
                 return is_int($result) ? $result : (int)$result;
             } else {
                 // For Predis
@@ -201,7 +259,13 @@ class RedisClientAdapter
      */
     public function sMembers(string $key): array
     {
-        return $this->client->sMembers($key);
+        try {
+            $result = $this->client->sMembers($key);
+            return is_array($result) ? $result : [];
+        } catch (\Exception $e) {
+            error_log('Error in sMembers: ' . $e->getMessage());
+            return [];
+        }
     }
 
     /**
@@ -213,13 +277,18 @@ class RedisClientAdapter
      */
     public function sRem(string $key, ...$values): int
     {
-        if ($this->clientType === 'phpredis') {
-            $result = $this->client->sRem($key, ...$values);
-            return is_int($result) ? $result : (int)$result;
-        } else {
-            // Fix the same issue here by using splat operator
-            $result = $this->client->srem($key, ...$values);
-            return is_int($result) ? $result : (int)$result;
+        try {
+            if ($this->clientType === 'phpredis') {
+                $result = $this->handleRedisResult($this->client->sRem($key, ...$values), count($values));
+                return is_int($result) ? $result : (int)$result;
+            } else {
+                // For Predis with correct argument handling
+                $result = $this->client->srem($key, ...$values);
+                return is_int($result) ? $result : (int)$result;
+            }
+        } catch (\Exception $e) {
+            error_log('Error in sRem: ' . $e->getMessage());
+            return 0;
         }
     }
 
@@ -231,8 +300,13 @@ class RedisClientAdapter
      */
     public function exists(string $key): bool
     {
-        $result = $this->client->exists($key);
-        return (bool)$result;
+        try {
+            $result = $this->handleRedisResult($this->client->exists($key), true);
+            return (bool)$result;
+        } catch (\Exception $e) {
+            error_log('Error in exists: ' . $e->getMessage());
+            return false;
+        }
     }
 
     /**
@@ -244,7 +318,13 @@ class RedisClientAdapter
      */
     public function incrBy(string $key, int $increment = 1): int
     {
-        return $this->client->incrBy($key, $increment);
+        try {
+            $result = $this->handleRedisResult($this->client->incrBy($key, $increment), $increment);
+            return is_int($result) ? $result : (int)$result;
+        } catch (\Exception $e) {
+            error_log('Error in incrBy: ' . $e->getMessage());
+            return 0;
+        }
     }
 
     /**
@@ -256,7 +336,12 @@ class RedisClientAdapter
      */
     public function hGet(string $key, string $field)
     {
-        return $this->client->hGet($key, $field);
+        try {
+            return $this->client->hGet($key, $field);
+        } catch (\Exception $e) {
+            error_log('Error in hGet: ' . $e->getMessage());
+            return false;
+        }
     }
 
     /**
@@ -269,7 +354,13 @@ class RedisClientAdapter
      */
     public function hSet(string $key, string $field, string $value)
     {
-        return $this->client->hSet($key, $field, $value);
+        try {
+            $result = $this->handleRedisResult($this->client->hSet($key, $field, $value), 1);
+            return $result;
+        } catch (\Exception $e) {
+            error_log('Error in hSet: ' . $e->getMessage());
+            return false;
+        }
     }
 
     /**
@@ -281,16 +372,21 @@ class RedisClientAdapter
      */
     public function __call(string $name, array $arguments)
     {
-        if (method_exists($this->client, $name)) {
-            return $this->client->$name(...$arguments);
-        }
+        try {
+            if (method_exists($this->client, $name)) {
+                return $this->client->$name(...$arguments);
+            }
 
-        // Try lowercase method name for Predis
-        if ($this->clientType === 'predis' && method_exists($this->client, strtolower($name))) {
-            $lowercaseName = strtolower($name);
-            return $this->client->$lowercaseName(...$arguments);
-        }
+            // Try lowercase method name for Predis
+            if ($this->clientType === 'predis' && method_exists($this->client, strtolower($name))) {
+                $lowercaseName = strtolower($name);
+                return $this->client->$lowercaseName(...$arguments);
+            }
 
-        throw new \BadMethodCallException(sprintf('Method "%s" does not exist on Redis client.', $name));
+            throw new \BadMethodCallException(sprintf('Method "%s" does not exist on Redis client.', $name));
+        } catch (\Exception $e) {
+            error_log('Error in __call for method ' . $name . ': ' . $e->getMessage());
+            return null;
+        }
     }
 }
