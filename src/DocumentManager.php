@@ -127,6 +127,9 @@ class DocumentManager
      */
     public function flush(): void
     {
+        // Todo: manage indexes on updates, remove the ones not used anymore
+        // OR add a timeout for indexes so we don't spiral out of control
+        // Also have a command to purge indexes
         // Start a Redis pipeline for better performance
         $this->redisClient->multi();
 
