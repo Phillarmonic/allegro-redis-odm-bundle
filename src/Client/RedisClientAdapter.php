@@ -169,32 +169,21 @@ class RedisClientAdapter
      */
     public function sAdd(string $key, ...$values): int
     {
-        if ($this->clientType === 'phpredis') {
-            $result = $this->client->sAdd($key, ...$values);
-
-            // If somehow we got the Redis object back, return 0 instead of failing
-            if (is_object($result)) {
-                error_log('Unexpected Redis object returned from sAdd');
-                return 0;
-            }
-
-            return is_int($result) ? $result : (int)$result;
-        } else {
-            try {
-                // For Predis, we need to pass the values as separate arguments
+        try {
+            if ($this->clientType === 'phpredis') {
+                // For PHPRedis, check the return type explicitly
+                $this->client->multi(); // Start transaction
+                $this->client->sAdd($key, ...$values);
+                $results = $this->client->exec();
+                return is_array($results) && isset($results[0]) ? (int)$results[0] : 0;
+            } else {
+                // For Predis
                 $result = $this->client->sadd($key, ...$values);
-
-                // If somehow we got the Redis object back, return 0 instead of failing
-                if (is_object($result)) {
-                    error_log('Unexpected Predis object returned from sadd');
-                    return 0;
-                }
-
                 return is_int($result) ? $result : (int)$result;
-            } catch (\Exception $e) {
-                error_log('Exception in RedisClientAdapter::sAdd - ' . $e->getMessage());
-                return 0;
             }
+        } catch (\Exception $e) {
+            error_log('Error in sAdd: ' . $e->getMessage());
+            return 0;
         }
     }
 
