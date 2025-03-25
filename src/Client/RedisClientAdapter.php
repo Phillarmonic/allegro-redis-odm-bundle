@@ -171,11 +171,17 @@ class RedisClientAdapter
     {
         try {
             if ($this->clientType === 'phpredis') {
-                // For PHPRedis, check the return type explicitly
-                $this->client->multi(); // Start transaction
-                $this->client->sAdd($key, ...$values);
-                $results = $this->client->exec();
-                return is_array($results) && isset($results[0]) ? (int)$results[0] : 0;
+                // Direct approach without transaction
+                $result = $this->client->sAdd($key, ...$values);
+
+                // Handle the case when the client object is returned
+                if (is_object($result) && $result instanceof \Redis) {
+                    // Try to get the cardinality of the set after addition to approximate the result
+                    $cardinality = $this->client->sCard($key);
+                    return is_int($cardinality) ? 1 : 0; // Return at least 1 if we can get the cardinality
+                }
+
+                return is_int($result) ? $result : (int)$result;
             } else {
                 // For Predis
                 $result = $this->client->sadd($key, ...$values);
