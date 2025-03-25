@@ -174,8 +174,8 @@ class RedisClientAdapter
             $result = $this->client->sAdd($key, ...$values);
             return is_int($result) ? $result : (int)$result;
         } else {
-            // Predis has a different method signature
-            $result = $this->client->sadd($key, $values);
+            // Predis has a different method signature but needs array elements as separate arguments
+            $result = $this->client->sadd($key, ...$values); // Just unwrap with splat again
             return is_int($result) ? $result : (int)$result;
         }
     }
@@ -204,8 +204,8 @@ class RedisClientAdapter
             $result = $this->client->sRem($key, ...$values);
             return is_int($result) ? $result : (int)$result;
         } else {
-            // Predis has a different method signature
-            $result = $this->client->srem($key, $values);
+            // Fix the same issue here by using splat operator
+            $result = $this->client->srem($key, ...$values);
             return is_int($result) ? $result : (int)$result;
         }
     }
