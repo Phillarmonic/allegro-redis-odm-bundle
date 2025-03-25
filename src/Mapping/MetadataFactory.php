@@ -2,7 +2,6 @@
 
 namespace Phillarmonic\AllegroRedisOdmBundle\Mapping;
 
-use Doctrine\Common\Annotations\Reader;
 use ReflectionClass;
 use ReflectionProperty;
 
@@ -11,7 +10,7 @@ class MetadataFactory
     private array $metadata = [];
     private array $mappings = [];
 
-    public function __construct(private ?Reader $reader = null, array $mappings = [])
+    public function __construct(array $mappings = [])
     {
         $this->mappings = $mappings;
     }
@@ -118,14 +117,6 @@ class MetadataFactory
             return $attributes[0]->newInstance();
         }
 
-        // Legacy annotation support
-        if ($this->reader !== null) {
-            $annotation = $this->reader->getClassAnnotation($class, $attributeClass);
-            if ($annotation) {
-                return $annotation;
-            }
-        }
-
         return null;
     }
 
@@ -134,14 +125,6 @@ class MetadataFactory
         $attributes = $property->getAttributes($attributeClass);
         if (!empty($attributes)) {
             return $attributes[0]->newInstance();
-        }
-
-        // Legacy annotation support
-        if ($this->reader !== null) {
-            $annotation = $this->reader->getPropertyAnnotation($property, $attributeClass);
-            if ($annotation) {
-                return $annotation;
-            }
         }
 
         return null;

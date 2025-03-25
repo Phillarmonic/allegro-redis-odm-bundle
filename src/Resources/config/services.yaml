@@ -17,7 +17,7 @@ services:
     allegro_redis_odm.document_manager:
         class: Phillarmonic\AllegroRedisOdmBundle\DocumentManager
         arguments:
-            - '@allegro_redis_odm.client'  # Will be replaced with client adapter
+            - '@allegro_redis_odm.client_adapter'
             - '@allegro_redis_odm.metadata_factory'
             - '@allegro_redis_odm.hydrator'
         public: true
@@ -25,7 +25,6 @@ services:
     allegro_redis_odm.metadata_factory:
         class: Phillarmonic\AllegroRedisOdmBundle\Mapping\MetadataFactory
         arguments:
-            - null  # Replace annotation_reader with null
             - '%allegro_redis_odm.mappings%'
         public: false
 
@@ -39,6 +38,7 @@ services:
         class: Phillarmonic\AllegroRedisOdmBundle\Repository\RepositoryFactory
         arguments:
             - '@allegro_redis_odm.document_manager'
+            - '@allegro_redis_odm.metadata_factory'
         public: false
 
     # Import mapping attributes as services
