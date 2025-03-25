@@ -172,8 +172,10 @@ class RedisClientAdapter
         if ($this->clientType === 'phpredis') {
             return $this->client->sAdd($key, ...$values);
         } else {
-            // Predis has a different method signature
-            return $this->client->sadd($key, $values);
+            // Predis has a different method signature but expects a flattened array of values
+            $result = $this->client->sadd($key, $values);
+            // Ensure we return an integer
+            return is_int($result) ? $result : (int)$result;
         }
     }
 
@@ -201,7 +203,9 @@ class RedisClientAdapter
             return $this->client->sRem($key, ...$values);
         } else {
             // Predis has a different method signature
-            return $this->client->srem($key, $values);
+            $result = $this->client->srem($key, $values);
+            // Ensure we return an integer
+            return is_int($result) ? $result : (int)$result;
         }
     }
 
