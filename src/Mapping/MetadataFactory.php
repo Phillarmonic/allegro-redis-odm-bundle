@@ -140,22 +140,28 @@ class MetadataFactory
     {
         // Return cached results if available
         if ($this->documentClasses !== null) {
+            error_log("Using cached document classes: " . count($this->documentClasses));
             return $this->documentClasses;
         }
 
         $this->documentClasses = [];
+        error_log("Scanning for document classes...");
 
         // Scan each mapping directory for document classes
         foreach ($this->mappings as $mappingName => $mapping) {
-            if (!isset($mapping['dir']) || !isset($mapping['namespace'])) {
+            error_log("Processing mapping: " . $mappingName);
+
+            if (!isset($mapping['dir'], $mapping['namespace'])) {
+                error_log("Missing dir or namespace in mapping");
                 continue;
             }
 
             $dir = $mapping['dir'];
             $namespace = $mapping['namespace'];
+            error_log("Scanning directory: " . $dir);
+            error_log("Using namespace: " . $namespace);
 
             if (!is_dir($dir)) {
-                // Log warning about directory not existing
                 error_log("Warning: Mapping directory '$dir' does not exist");
                 continue;
             }
@@ -167,31 +173,46 @@ class MetadataFactory
                     \RecursiveIteratorIterator::LEAVES_ONLY
                 );
 
+                $fileCount = 0;
                 foreach ($finder as $file) {
+                    $fileCount++;
                     // Skip directories and non-PHP files
                     if ($file->isDir() || $file->getExtension() !== 'php') {
                         continue;
                     }
 
+                    error_log("Found PHP file: " . $file->getPathname());
+
                     // Get relative path from the mapping directory
                     $relativePath = str_replace($dir . DIRECTORY_SEPARATOR, '', $file->getRealPath());
                     $relativePath = str_replace('\\', '/', $relativePath); // Normalize directory separators
+                    error_log("Relative path: " . $relativePath);
 
                     // Convert file path to class name
                     $relativeClass = str_replace('/', '\\', substr($relativePath, 0, -4)); // Remove .php
                     $className = $namespace . '\\' . $relativeClass;
+                    error_log("Checking class: " . $className);
 
                     // Check if class exists and is a document
-                    if (class_exists($className) && $this->isDocument($className)) {
-                        $this->documentClasses[] = $className;
+                    if (class_exists($className)) {
+                        error_log("Class exists");
+                        if ($this->isDocument($className)) {
+                            error_log("Class is a document: " . $className);
+                            $this->documentClasses[] = $className;
+                        } else {
+                            error_log("Class is not a document");
+                        }
+                    } else {
+                        error_log("Class does not exist: " . $className);
                     }
                 }
+                error_log("Processed $fileCount files in $dir");
             } catch (\Exception $e) {
-                // Log error with more detail
                 error_log('Error scanning directory ' . $dir . ': ' . $e->getMessage() . "\n" . $e->getTraceAsString());
             }
         }
 
+        error_log("Found " . count($this->documentClasses) . " document classes");
         return $this->documentClasses;
     }
 
