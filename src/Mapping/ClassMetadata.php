@@ -15,6 +15,7 @@ class ClassMetadata
 
     public array $fields = [];
     public array $indices = [];
+    public array $indicesTTL = []; // Store TTL for each index
 
     public function __construct(string $className)
     {
@@ -30,9 +31,10 @@ class ClassMetadata
         ];
     }
 
-    public function addIndex(string $propertyName, string $indexName): void
+    public function addIndex(string $propertyName, string $indexName, int $ttl = 0): void
     {
         $this->indices[$propertyName] = $indexName;
+        $this->indicesTTL[$indexName] = $ttl;
     }
 
     public function getKeyName(string $id): string
@@ -72,6 +74,14 @@ class ClassMetadata
         }
 
         return 'idx:' . $this->collection . ':' . $indexName . ':*';
+    }
+
+    /**
+     * Get TTL for a specific index
+     */
+    public function getIndexTTL(string $indexName): int
+    {
+        return $this->indicesTTL[$indexName] ?? 0;
     }
 
     /**
@@ -156,5 +166,13 @@ class ClassMetadata
     public function getIndices(): array
     {
         return $this->indices;
+    }
+
+    /**
+     * Get all index TTLs as index name => ttl mapping
+     */
+    public function getIndicesTTL(): array
+    {
+        return $this->indicesTTL;
     }
 }

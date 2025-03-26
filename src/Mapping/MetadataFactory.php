@@ -83,7 +83,7 @@ class MetadataFactory
                 $indexAttribute = $this->getPropertyAttribute($property, Index::class);
                 if ($indexAttribute) {
                     $indexName = $indexAttribute->name ?: $fieldName;
-                    $metadata->addIndex($property->getName(), $indexName);
+                    $metadata->addIndex($property->getName(), $indexName, $indexAttribute->ttl);
                 }
             }
         }
@@ -91,7 +91,6 @@ class MetadataFactory
         $this->metadata[$className] = $metadata;
         return $metadata;
     }
-
     /**
      * Check if a class is a valid document
      */
@@ -128,5 +127,67 @@ class MetadataFactory
         }
 
         return null;
+    }
+
+    /**
+     * Get all document classes from configured mappings
+     *
+     * @return array Array of fully qualified class names that are documents
+     */
+    public function getAllDocumentClasses(): array
+    {
+        // Return cached results if available
+        if (!empty($this->documentClasses)) {
+            return $this->documentClasses;
+        }
+
+        $this->documentClasses = [];
+
+        // Scan each mapping directory for document classes
+        foreach ($this->mappings as $mappingName => $mapping) {
+            if (!isset($mapping['dir']) || !isset($mapping['namespace'])) {
+                continue;
+            }
+
+            $dir = $mapping['dir'];
+            $namespace = $mapping['namespace'];
+
+            if (!is_dir($dir)) {
+                continue;
+            }
+
+            try {
+                // Find PHP files in the directory and subdirectories
+                $finder = new \RecursiveIteratorIterator(
+                    new \RecursiveDirectoryIterator($dir),
+                    \RecursiveIteratorIterator::LEAVES_ONLY
+                );
+
+                foreach ($finder as $file) {
+                    // Skip directories and non-PHP files
+                    if ($file->isDir() || $file->getExtension() !== 'php') {
+                        continue;
+                    }
+
+                    // Get relative path from the mapping directory
+                    $relativePath = str_replace($dir . DIRECTORY_SEPARATOR, '', $file->getRealPath());
+                    $relativePath = str_replace('\\', '/', $relativePath); // Normalize directory separators
+
+                    // Convert file path to class name
+                    $relativeClass = str_replace('/', '\\', substr($relativePath, 0, -4)); // Remove .php
+                    $className = $namespace . '\\' . $relativeClass;
+
+                    // Check if class exists and is a document
+                    if (class_exists($className) && $this->isDocument($className)) {
+                        $this->documentClasses[] = $className;
+                    }
+                }
+            } catch (\Exception $e) {
+                // Log or handle exception
+                error_log('Error scanning directory ' . $dir . ': ' . $e->getMessage());
+            }
+        }
+
+        return $this->documentClasses;
     }
 }

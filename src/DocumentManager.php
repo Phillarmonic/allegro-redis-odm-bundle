@@ -127,9 +127,6 @@ class DocumentManager
      */
     public function flush(): void
     {
-        // Todo: manage indexes on updates, remove the ones not used anymore
-        // OR add a timeout for indexes so we don't spiral out of control
-        // Also have a command to purge indexes
         // Start a Redis pipeline for better performance
         $this->redisClient->multi();
 
@@ -143,20 +140,7 @@ class DocumentManager
                 $this->redisClient->del($redisKey);
 
                 // Remove any indices
-                foreach ($metadata->indices as $propertyName => $indexName) {
-                    // We need the old field value to remove from index
-                    if (isset($this->identityMap[$key])) {
-                        $oldDoc = $this->identityMap[$key];
-                        $reflProperty = new ReflectionProperty($className, $propertyName);
-                        $reflProperty->setAccessible(true);
-                        $value = $reflProperty->getValue($oldDoc);
-
-                        if ($value !== null) {
-                            $indexKey = $metadata->getIndexKeyName($indexName, $value);
-                            $this->redisClient->sRem($indexKey, $id);
-                        }
-                    }
-                }
+                $this->cleanupDocumentIndices($className, $id, $metadata);
 
                 // Remove from identity map
                 unset($this->identityMap[$key]);
@@ -164,15 +148,34 @@ class DocumentManager
                 // Extract data from document
                 $data = $this->hydrator->extract($document);
 
-                // Handle indices
+                // Handle indices, first check for existing document to clean up old index values
+                $oldDoc = $this->identityMap[$key] ?? null;
+
+                // For each indexed property, update index
                 foreach ($metadata->indices as $propertyName => $indexName) {
+                    // Get the new value
                     $reflProperty = new ReflectionProperty($className, $propertyName);
                     $reflProperty->setAccessible(true);
-                    $value = $reflProperty->getValue($document);
+                    $newValue = $reflProperty->getValue($document);
 
-                    if ($value !== null) {
-                        $indexKey = $metadata->getIndexKeyName($indexName, $value);
-                        $this->redisClient->sAdd($indexKey, $id);
+                    // Get the old value if there was one
+                    $oldValue = null;
+                    if ($oldDoc) {
+                        $oldValue = $reflProperty->getValue($oldDoc);
+                    }
+
+                    // If values are different, update indices
+                    if ($oldValue !== $newValue) {
+                        // Remove old index if it existed
+                        if ($oldValue !== null) {
+                            $oldIndexKey = $metadata->getIndexKeyName($indexName, $oldValue);
+                            $this->redisClient->sRem($oldIndexKey, $id);
+                        }
+
+                        // Add new index if value exists
+                        if ($newValue !== null) {
+                            $this->updateIndex($metadata, $indexName, $newValue, $id);
+                        }
                     }
                 }
 
@@ -209,5 +212,57 @@ class DocumentManager
     public function getRedisClient(): RedisClientAdapter
     {
         return $this->redisClient;
+    }
+
+    /**
+     * Updates or creates an index entry for a document with optional TTL
+     */
+    private function updateIndex(ClassMetadata $metadata, string $indexName, $value, string $id): void
+    {
+        if ($value === null) {
+            return;
+        }
+
+        $indexKey = $metadata->getIndexKeyName($indexName, $value);
+        $this->redisClient->sAdd($indexKey, $id);
+
+        // Apply TTL if configured
+        $ttl = $metadata->getIndexTTL($indexName);
+        if ($ttl > 0) {
+            $this->redisClient->expire($indexKey, $ttl);
+        }
+    }
+
+    /**
+     * Helper method to clean up all indices for a document
+     * @throws \ReflectionException
+     */
+    private function cleanupDocumentIndices(string $className, string $id, ClassMetadata $metadata): void
+    {
+        $oldDoc = $this->identityMap[$className . ':' . $id] ?? null;
+
+        if ($oldDoc) {
+            // If we have the old document in identity map, remove specific indices
+            foreach ($metadata->indices as $propertyName => $indexName) {
+                $reflProperty = new ReflectionProperty($className, $propertyName);
+                $reflProperty->setAccessible(true);
+                $oldValue = $reflProperty->getValue($oldDoc);
+
+                if ($oldValue !== null) {
+                    $indexKey = $metadata->getIndexKeyName($indexName, $oldValue);
+                    $this->redisClient->sRem($indexKey, $id);
+                }
+            }
+        } else {
+            // Otherwise scan for any potential indices (less efficient but complete)
+            foreach ($metadata->indices as $propertyName => $indexName) {
+                $pattern = $metadata->getIndexKeyPattern($indexName);
+                $keys = $this->redisClient->keys($pattern);
+
+                foreach ($keys as $indexKey) {
+                    $this->redisClient->sRem($indexKey, $id);
+                }
+            }
+        }
     }
 }
