@@ -11,6 +11,7 @@ class MetadataFactory
     private array $metadata = [];
     private array $mappings = [];
     private ?array $documentClasses = null;
+    private ?ParameterBagInterface $parameterBag = null;
 
     /**
      * Constructor accepts either direct mappings array or a parameter bag to fetch from container
@@ -19,21 +20,29 @@ class MetadataFactory
      */
     public function __construct($mappingsOrParams = [])
     {
-        // If we received a parameter bag, extract mappings from it
+        // If we received a parameter bag, store it for later use
         if ($mappingsOrParams instanceof ParameterBagInterface) {
-            $this->mappings = $mappingsOrParams->get('allegro_redis_odm.mappings');
+            $this->parameterBag = $mappingsOrParams;
+            try {
+                $this->mappings = $mappingsOrParams->get('allegro_redis_odm.mappings');
+                error_log("MetadataFactory initialized with mappings from parameter bag: " . print_r($this->mappings, true));
+            } catch (\Exception $e) {
+                error_log("Error retrieving mappings from parameter bag: " . $e->getMessage());
+                $this->mappings = [];
+            }
         }
         // Otherwise, use the provided mappings directly
         else if (is_array($mappingsOrParams)) {
             $this->mappings = $mappingsOrParams;
+            error_log("MetadataFactory initialized with mappings array: " . print_r($this->mappings, true));
         }
-
-        // Log the mappings we received for debugging
-        error_log("MetadataFactory initialized with mappings: " . print_r($this->mappings, true));
     }
 
     public function getMetadataFor(string $className): ClassMetadata
     {
+        // Ensure we have the latest mappings from the parameter bag
+        $this->refreshMappings();
+
         if (isset($this->metadata[$className])) {
             return $this->metadata[$className];
         }
@@ -108,6 +117,7 @@ class MetadataFactory
         $this->metadata[$className] = $metadata;
         return $metadata;
     }
+
     /**
      * Check if a class is a valid document
      */
@@ -153,6 +163,9 @@ class MetadataFactory
      */
     public function getAllDocumentClasses(): array
     {
+        // Ensure we have the latest mappings from the parameter bag
+        $this->refreshMappings();
+
         // Return cached results if available
         if ($this->documentClasses !== null) {
             return $this->documentClasses;
@@ -180,7 +193,22 @@ class MetadataFactory
 
             if (!is_dir($dir)) {
                 error_log("Warning: Mapping directory '{$dir}' does not exist");
-                continue;
+
+                // Try to resolve relative to project root if we have access to the parameter bag
+                if ($this->parameterBag !== null && $this->parameterBag->has('kernel.project_dir')) {
+                    $projectDir = $this->parameterBag->get('kernel.project_dir');
+                    $resolvedDir = $projectDir . '/' . $dir;
+
+                    if (is_dir($resolvedDir)) {
+                        $dir = $resolvedDir;
+                        error_log("Resolved directory to '{$dir}'");
+                    } else {
+                        error_log("Could not resolve directory even with project root: '{$resolvedDir}'");
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
             }
 
             try {
@@ -191,6 +219,22 @@ class MetadataFactory
         }
 
         return $this->documentClasses;
+    }
+
+    /**
+     * Refresh mappings from parameter bag if available
+     */
+    private function refreshMappings(): void
+    {
+        if ($this->parameterBag !== null && $this->parameterBag->has('allegro_redis_odm.mappings')) {
+            $mappings = $this->parameterBag->get('allegro_redis_odm.mappings');
+            if ($mappings !== $this->mappings) {
+                error_log("Refreshing mappings from parameter bag - found different mappings");
+                $this->mappings = $mappings;
+                // Reset document classes cache to force re-scanning
+                $this->documentClasses = null;
+            }
+        }
     }
 
     /**
@@ -242,12 +286,16 @@ class MetadataFactory
             if ($this->isDocument($className)) {
                 error_log("Found document class: {$className}");
                 $this->documentClasses[] = $className;
+            } else {
+                error_log("Class {$className} exists but is not a document (no Document attribute found)");
             }
         }
     }
 
     public function getMappings(): array
     {
+        // Ensure we have the latest mappings from the parameter bag
+        $this->refreshMappings();
         return $this->mappings;
     }
 }
