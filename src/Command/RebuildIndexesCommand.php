@@ -12,7 +12,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[AsCommand(
-    name: 'allegro:redis:rebuild-indexes',
+    name: 'allegro:rebuild-indexes',
     description: 'Rebuild Redis indexes for documents'
 )]
 class RebuildIndexesCommand extends Command
