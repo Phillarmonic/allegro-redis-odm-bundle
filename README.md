@@ -325,8 +325,8 @@ class UserRepository extends DocumentRepository
 Then reference it in your document:
 
 ```php
-#[Document(collection: 'users', repository: UserRepository::class)]
-class User
+#[Document(collection: 'articles', repository: ArticleRepository::class)]
+class Article
 {
     // ...
 }
@@ -374,17 +374,25 @@ Use the document manager to persist multiple objects in a single transaction:
 
 ```php
 // Persist multiple entities at once
-$product1 = new Product();
-$product1->setName('Laptop');
-$product1->setPrice(999.99);
+$article1 = new Article();
+$article1->setTitle('Introduction to Redis');
+$article1->setContent('Redis is an in-memory data structure store...');
+$article1->setCategory('databases');
+$article1->setPublishedAt(new \DateTime());
+$article1->setIsPublished(true);
+$article1->setSlug('introduction-to-redis');
 
-$product2 = new Product();
-$product2->setName('Mouse');
-$product2->setPrice(29.99);
+$article2 = new Article();
+$article2->setTitle('Redis vs. MongoDB');
+$article2->setContent('When comparing Redis and MongoDB...');
+$article2->setCategory('databases');
+$article2->setPublishedAt(new \DateTime());
+$article2->setIsPublished(true);
+$article2->setSlug('redis-vs-mongodb');
 
 // Both will be persisted in a single Redis transaction
-$documentManager->persist($product1);
-$documentManager->persist($product2);
+$documentManager->persist($article1);
+$documentManager->persist($article2);
 $documentManager->flush();
 ```
 
@@ -399,7 +407,7 @@ The ODM uses Redis Sets for indexing. When you mark a property with `#[Index]`, 
 private string $category;
 
 // Then, when querying:
-$products = $repository->findBy(['category' => 'electronics']);
+$articles = $repository->findBy(['category' => 'technology']);
 ```
 
 This query will be highly efficient because it uses Redis sets to directly find the relevant document IDs without scanning all documents.
@@ -448,8 +456,8 @@ You can set TTL on specific indexes to auto-expire them:
 
 ```php
 #[Field]
-#[Index(name: 'session_token', ttl: 3600)] // 1-hour TTL on this index
-private string $sessionToken;
+#[Index(name: 'featured', ttl: 86400)] // 24-hour TTL on this index
+private bool $isFeatured;
 ```
 
 ## Best Practices
