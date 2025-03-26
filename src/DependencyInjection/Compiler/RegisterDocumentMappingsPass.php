@@ -22,14 +22,14 @@ class RegisterDocumentMappingsPass implements CompilerPassInterface
         }
 
         $mappings = $container->getParameter('allegro_redis_odm.mappings');
-        error_log('RegisterDocumentMappingsPass: Raw mappings: ' . print_r($mappings, true));
+//        error_log('RegisterDocumentMappingsPass: Raw mappings: ' . print_r($mappings, true));
 
         if (empty($mappings)) {
             error_log('RegisterDocumentMappingsPass: No document mappings configured');
             return;
         }
 
-        error_log(sprintf('RegisterDocumentMappingsPass: Processing %d document mappings', count($mappings)));
+//        error_log(sprintf('RegisterDocumentMappingsPass: Processing %d document mappings', count($mappings)));
 
         // Process and validate each mapping
         $processedMappings = [];
@@ -63,15 +63,15 @@ class RegisterDocumentMappingsPass implements CompilerPassInterface
 
             // Store the processed mapping
             $processedMappings[$name] = $mapping;
-            error_log(sprintf('RegisterDocumentMappingsPass: Registered mapping "%s": namespace="%s", dir="%s", status="%s"',
-                $name, $mapping['namespace'], $mapping['dir'], $dirStatus));
+//            error_log(sprintf('RegisterDocumentMappingsPass: Registered mapping "%s": namespace="%s", dir="%s", status="%s"',
+//                $name, $mapping['namespace'], $mapping['dir'], $dirStatus));
         }
 
         // Update the mappings parameter with processed mappings
         $container->setParameter('allegro_redis_odm.mappings', $processedMappings);
-        error_log('RegisterDocumentMappingsPass: Updated parameter allegro_redis_odm.mappings with: ' . print_r($processedMappings, true));
+//        error_log('RegisterDocumentMappingsPass: Updated parameter allegro_redis_odm.mappings with: ' . print_r($processedMappings, true));
 
         // We no longer set the constructor argument directly since we're using the parameter bag
-        error_log('RegisterDocumentMappingsPass: Completed with ' . count($processedMappings) . ' mappings');
+//        error_log('RegisterDocumentMappingsPass: Completed with ' . count($processedMappings) . ' mappings');
     }
 }
