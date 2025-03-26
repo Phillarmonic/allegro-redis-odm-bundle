@@ -181,7 +181,7 @@ class MetadataFactory
 
         // Scan each mapping directory for document classes
         foreach ($this->mappings as $mappingName => $mapping) {
-            error_log("Processing mapping: " . $mappingName);
+//            error_log("Processing mapping: " . $mappingName);
 
             if (!isset($mapping['dir'], $mapping['namespace'])) {
                 error_log("Missing dir or namespace in mapping {$mappingName}");
@@ -284,7 +284,7 @@ class MetadataFactory
 
             // Check if it's a document class
             if ($this->isDocument($className)) {
-                error_log("Found document class: {$className}");
+//                error_log("Found document class: {$className}");
                 $this->documentClasses[] = $className;
             } else {
                 error_log("Class {$className} exists but is not a document (no Document attribute found)");
