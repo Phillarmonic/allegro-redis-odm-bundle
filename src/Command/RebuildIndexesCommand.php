@@ -38,6 +38,15 @@ class RebuildIndexesCommand extends Command
         $io = new SymfonyStyle($input, $output);
         $io->title('Redis ODM Index Rebuild');
 
+         $io->section('Configured Mappings:');
+        $mappingsConfig = $this->metadataFactory->getMappings(); // You would need to add this method
+        foreach ($mappingsConfig as $name => $mapping) {
+            $io->text("Mapping: $name");
+            $io->text("  Directory: " . ($mapping['dir'] ?? 'Not set'));
+            $io->text("  Namespace: " . ($mapping['namespace'] ?? 'Not set'));
+            $io->text("  Exists: " . (is_dir($mapping['dir'] ?? '') ? 'Yes' : 'No'));
+        }
+
         $specificClass = $input->getOption('class');
         $batchSize = (int) $input->getOption('batch-size');
         $clearIndexes = (bool) $input->getOption('clear-indexes');

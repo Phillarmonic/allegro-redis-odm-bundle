@@ -190,4 +190,8 @@ class MetadataFactory
 
         return $this->documentClasses;
     }
+    public function getMappings(): array
+    {
+        return $this->mappings;
+    }
 }
