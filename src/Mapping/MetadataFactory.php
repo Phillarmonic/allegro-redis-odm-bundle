@@ -25,7 +25,7 @@ class MetadataFactory
             $this->parameterBag = $mappingsOrParams;
             try {
                 $this->mappings = $mappingsOrParams->get('allegro_redis_odm.mappings');
-                error_log("MetadataFactory initialized with mappings from parameter bag: " . print_r($this->mappings, true));
+//                error_log("MetadataFactory initialized with mappings from parameter bag: " . print_r($this->mappings, true));
             } catch (\Exception $e) {
                 error_log("Error retrieving mappings from parameter bag: " . $e->getMessage());
                 $this->mappings = [];
