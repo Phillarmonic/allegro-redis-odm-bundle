@@ -49,3 +49,9 @@ services:
     Phillarmonic\AllegroRedisOdmBundle\Command\:
         resource: '../../Command/*'
         tags: [ 'console.command' ]
+
+    Phillarmonic\AllegroRedisOdmBundle\Command\DebugMappingsCommand:
+        arguments:
+            - '@allegro_redis_odm.metadata_factory'
+            - '@service_container'
+        tags: [ 'console.command' ]
