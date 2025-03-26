@@ -13,7 +13,7 @@
     "require": {
         "php": ">=8.2",
         "doctrine/doctrine-bundle": "^2.10",
-        "doctrine/orm": "^2.0|^3.3",
+        "doctrine/orm": "^2.0|^3.0",
         "symfony/config": "^6.0|^7.0",
         "symfony/dependency-injection": "^6.0|^7.0",
         "symfony/framework-bundle": "^6.0|^7.0"
