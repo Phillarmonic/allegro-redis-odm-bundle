@@ -53,12 +53,12 @@ allegro_redis_odm:
         # auth: null       # Password if required
         # read_timeout: 0
         # persistent: false
-    
+
     # Default storage settings
     default_storage:
         type: hash         # Options: hash, json
         ttl: 0             # Default TTL in seconds (0 = no expiration)
-    
+
     # Document mappings
     mappings:
         app:
@@ -85,66 +85,66 @@ use Phillarmonic\AllegroRedisOdmBundle\Mapping\Index;
 use Phillarmonic\AllegroRedisOdmBundle\Mapping\RedisHash;
 use Phillarmonic\AllegroRedisOdmBundle\Mapping\Expiration;
 
-#[Document(collection: 'articles')]
+#[Document(collection: 'articles', prefix:'blog')] // You can add a custom prefix to the entity key
 #[RedisHash]
 #[Expiration(ttl: 3600)] // Optional: 1-hour expiration
 class Article
 {
     #[Id]
     private ?string $id = null;
-    
+
     #[Field]
     #[Index]
     private string $slug;
-    
+
     #[Field(name: 'title', nullable: false)]
     private string $title;
-    
+
     #[Field(type: 'string', nullable: true)]
     private ?string $content = null;
-    
+
     #[Field]
     #[Index]
     private string $category;
-    
+
     #[Field(type: 'boolean')]
     private bool $isPublished = false;
-    
+
     #[Field(type: 'integer')]
     private int $viewCount = 0;
-    
+
     #[Field(type: 'datetime')]
     private ?\DateTime $publishedAt = null;
-    
+
     // Getters and setters...
-    
+
     public function getId(): ?string
     {
         return $this->id;
     }
-    
+
     public function getSlug(): string
     {
         return $this->slug;
     }
-    
+
     public function setSlug(string $slug): self
     {
         $this->slug = $slug;
         return $this;
     }
-    
+
     public function getTitle(): string
     {
         return $this->title;
     }
-    
+
     public function setTitle(string $title): self
     {
         $this->title = $title;
         return $this;
     }
-    
+
     // Add other getters and setters...
 }
 ```
@@ -166,7 +166,7 @@ class ArticleService
         private DocumentManager $documentManager
     ) {
     }
-    
+
     public function createArticle(string $title, string $slug, string $category): Article
     {
         $article = new Article();
@@ -174,18 +174,18 @@ class ArticleService
         $article->setSlug($slug);
         $article->setCategory($category);
         $article->setPublishedAt(new \DateTime());
-        
+
         $this->documentManager->persist($article);
         $this->documentManager->flush();
-        
+
         return $article;
     }
-    
+
     public function findArticleById(string $id): ?Article
     {
         return $this->documentManager->find(Article::class, $id);
     }
-    
+
     public function findArticleBySlug(string $slug): ?Article
     {
         $repository = $this->documentManager->getRepository(Article::class);
@@ -196,19 +196,20 @@ class ArticleService
 
 ### Mapping Attributes
 
-| Attribute | Target | Description |
-|-----------|--------|-------------|
-| `#[Document]` | Class | Marks a class as a Redis document |
-| `#[RedisHash]` | Class | Stores document as a Redis hash (default) |
-| `#[RedisJson]` | Class | Stores document as JSON in Redis |
-| `#[Expiration]` | Class | Sets TTL for document |
-| `#[Id]` | Property | Marks a property as the document ID |
-| `#[Field]` | Property | Maps a property to a Redis field |
-| `#[Index]` | Property | Creates a secondary index for a field |
+| Attribute       | Target   | Description                               |
+| --------------- | -------- | ----------------------------------------- |
+| `#[Document]`   | Class    | Marks a class as a Redis document         |
+| `#[RedisHash]`  | Class    | Stores document as a Redis hash (default) |
+| `#[RedisJson]`  | Class    | Stores document as JSON in Redis          |
+| `#[Expiration]` | Class    | Sets TTL for document                     |
+| `#[Id]`         | Property | Marks a property as the document ID       |
+| `#[Field]`      | Property | Maps a property to a Redis field          |
+| `#[Index]`      | Property | Creates a secondary index for a field     |
 
 ### Field Types
 
 The `Field` attribute supports the following types:
+
 - `string` (default)
 - `integer`
 - `float`
@@ -251,23 +252,23 @@ class ArticleController extends AbstractController
         private DocumentManager $documentManager
     ) {
     }
-    
+
     public function listArticles(): Response
     {
         $articleRepository = $this->documentManager->getRepository(Article::class);
-        
+
         // Find a single document by ID
         $article = $articleRepository->find('article123');
-        
+
         // Find all documents
         $allArticles = $articleRepository->findAll();
-        
+
         // Find by criteria - uses indexed fields when available
         $publishedTechArticles = $articleRepository->findBy([
             'isPublished' => true,
             'category' => 'technology'
         ]);
-        
+
         // Find with ordering, limit and offset
         $recentArticles = $articleRepository->findBy(
             ['isPublished' => true],
@@ -275,13 +276,13 @@ class ArticleController extends AbstractController
             10,                         // Limit to 10 results
             0                           // Start from offset 0
         );
-        
+
         // Find a single document by criteria
         $article = $articleRepository->findOneBy(['slug' => 'introduction-to-redis']);
-        
+
         // Count documents
         $totalCount = $articleRepository->count();
-        
+
         // ... controller logic
     }
 }
@@ -305,40 +306,40 @@ class ArticleRepository extends DocumentRepository
     {
         $allArticles = $this->findAll();
         $recentArticles = [];
-        
+
         foreach ($allArticles as $article) {
             if ($article->getPublishedAt() && $article->getPublishedAt() > new \DateTime('-' . $days . ' days')) {
                 $recentArticles[] = $article;
             }
         }
-        
+
         return $recentArticles;
     }
-    
+
     public function findByTitlePattern(string $pattern): array
     {
         // Using lower-level Redis client via document manager
         $redisClient = $this->documentManager->getRedisClient();
-        
+
         // Get all document keys for this collection
         $keyPattern = $this->metadata->getCollectionKeyPattern();
         $keys = $redisClient->keys($keyPattern);
-        
+
         $result = [];
         foreach ($keys as $key) {
             // Extract ID from key
             $parts = explode(':', $key);
             $id = end($parts);
-            
+
             // Find the document
             $article = $this->find($id);
-            
+
             // Apply custom filtering
             if ($article && str_contains(strtolower($article->getTitle()), strtolower($pattern))) {
                 $result[] = $article;
             }
         }
-        
+
         return $result;
     }
 }
@@ -362,7 +363,7 @@ class Article
 allegro_redis_odm:
     # Redis client implementation (required)
     client_type: phpredis     # Options: phpredis, predis
-    
+
     # Redis connection settings (required)
     connection:
         scheme: redis         # Options: redis, rediss (for TLS/SSL)
@@ -373,12 +374,12 @@ allegro_redis_odm:
         read_timeout: 0       # Read timeout in seconds
         persistent: false     # Use persistent connections
         options: []           # Additional client-specific options
-    
+
     # Default storage settings (optional)
     default_storage:
         type: hash            # Options: hash, json
         ttl: 0                # Default TTL in seconds (0 = no expiration)
-    
+
     # Document mappings (required - at least one mapping)
     mappings:
         app:                  # Mapping name (arbitrary)
