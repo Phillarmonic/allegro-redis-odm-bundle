@@ -13,7 +13,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
 #[AsCommand(
-    name: 'allegro:redis:purge-indexes',
+    name: 'allegro:purge-indexes',
     description: 'Purge stale Redis indexes for documents'
 )]
 class PurgeIndexesCommand extends Command
