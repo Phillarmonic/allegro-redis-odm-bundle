@@ -28,7 +28,6 @@ class DebugMappingsCommand extends Command
     protected function configure(): void
     {
         $this
-            ->addOption('verbose', 'v', InputOption::VALUE_NONE, 'Show more detailed information')
             ->addOption('scan-directories', 's', InputOption::VALUE_NONE, 'Explicitly scan mapping directories for PHP files')
             ->addOption('test-class', 't', InputOption::VALUE_REQUIRED, 'Test a specific class for document attributes');
     }
