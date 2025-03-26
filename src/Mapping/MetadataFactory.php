@@ -274,7 +274,7 @@ class MetadataFactory
             // Construct full class name
             $className = $namespace . '\\' . $relativeClass;
 
-            error_log("Found potential class: {$className}");
+//            error_log("Found potential class: {$className}");
 
             // Check if class exists (will trigger autoloading)
             if (!class_exists($className)) {
