@@ -209,6 +209,62 @@ php bin/console allegro:rebuild-indexes
 php bin/console allegro:purge-indexes
 ```
 
+### Working with Repositories
+
+The bundle provides a `DocumentRepository` class with several finder methods similar to Doctrine:
+
+```php
+<?php
+// Example controller or service using repositories
+namespace App\Controller;
+
+use App\Document\User;
+use App\Document\Product;
+use Phillarmonic\AllegroRedisOdmBundle\DocumentManager;
+use Symfony\Component\HttpFoundation\Response;
+
+class UserController extends AbstractController
+{
+    public function __construct(
+        private DocumentManager $documentManager
+    ) {
+    }
+    
+    public function listUsers(): Response
+    {
+        $userRepository = $this->documentManager->getRepository(User::class);
+        
+        // Find a single document by ID
+        $user = $userRepository->find('user123');
+        
+        // Find all documents
+        $allUsers = $userRepository->findAll();
+        
+        // Find by criteria - uses indexed fields when available
+        $activeAdmins = $userRepository->findBy([
+            'status' => 'active',
+            'role' => 'admin'
+        ]);
+        
+        // Find with ordering, limit and offset
+        $recentUsers = $userRepository->findBy(
+            ['status' => 'active'],
+            ['createdAt' => 'DESC'],  // Order by createdAt descending
+            10,                      // Limit to 10 results
+            0                        // Start from offset 0
+        );
+        
+        // Find a single document by criteria
+        $user = $userRepository->findOneBy(['email' => 'john@example.com']);
+        
+        // Count documents
+        $totalCount = $userRepository->count();
+        
+        // ... controller logic
+    }
+}
+```
+
 ## Custom Repositories
 
 You can create custom repository classes for more specific queries:
@@ -235,6 +291,33 @@ class UserRepository extends DocumentRepository
         }
         
         return $activeUsers;
+    }
+    
+    public function findByUsernamePattern(string $pattern): array
+    {
+        // Using lower-level Redis client via document manager
+        $redisClient = $this->documentManager->getRedisClient();
+        
+        // Get all document keys for this collection
+        $keyPattern = $this->metadata->getCollectionKeyPattern();
+        $keys = $redisClient->keys($keyPattern);
+        
+        $result = [];
+        foreach ($keys as $key) {
+            // Extract ID from key
+            $parts = explode(':', $key);
+            $id = end($parts);
+            
+            // Find the document
+            $user = $this->find($id);
+            
+            // Apply custom filtering
+            if ($user && str_contains(strtolower($user->getUsername()), strtolower($pattern))) {
+                $result[] = $user;
+            }
+        }
+        
+        return $result;
     }
 }
 ```
@@ -284,6 +367,42 @@ allegro_redis_odm:
 ```
 
 ## Advanced Usage
+
+### Transactions and Batch Processing
+
+Use the document manager to persist multiple objects in a single transaction:
+
+```php
+// Persist multiple entities at once
+$product1 = new Product();
+$product1->setName('Laptop');
+$product1->setPrice(999.99);
+
+$product2 = new Product();
+$product2->setName('Mouse');
+$product2->setPrice(29.99);
+
+// Both will be persisted in a single Redis transaction
+$documentManager->persist($product1);
+$documentManager->persist($product2);
+$documentManager->flush();
+```
+
+### Indexing and Querying
+
+The ODM uses Redis Sets for indexing. When you mark a property with `#[Index]`, a Redis Set is created that maps each unique value of the property to all document IDs that have that value.
+
+```php
+// In your document class
+#[Field]
+#[Index]
+private string $category;
+
+// Then, when querying:
+$products = $repository->findBy(['category' => 'electronics']);
+```
+
+This query will be highly efficient because it uses Redis sets to directly find the relevant document IDs without scanning all documents.
 
 ### Using With TLS/SSL
 
