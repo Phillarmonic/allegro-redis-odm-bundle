@@ -9,6 +9,7 @@ class MetadataFactory
 {
     private array $metadata = [];
     private array $mappings = [];
+    private ?array $documentClasses = null;
 
     public function __construct(array $mappings = [])
     {
@@ -129,6 +130,7 @@ class MetadataFactory
         return null;
     }
 
+
     /**
      * Get all document classes from configured mappings
      *
@@ -137,7 +139,7 @@ class MetadataFactory
     public function getAllDocumentClasses(): array
     {
         // Return cached results if available
-        if (!empty($this->documentClasses)) {
+        if ($this->documentClasses !== null) {
             return $this->documentClasses;
         }
 
@@ -153,13 +155,15 @@ class MetadataFactory
             $namespace = $mapping['namespace'];
 
             if (!is_dir($dir)) {
+                // Log warning about directory not existing
+                error_log("Warning: Mapping directory '$dir' does not exist");
                 continue;
             }
 
             try {
                 // Find PHP files in the directory and subdirectories
                 $finder = new \RecursiveIteratorIterator(
-                    new \RecursiveDirectoryIterator($dir),
+                    new \RecursiveDirectoryIterator($dir, \RecursiveDirectoryIterator::SKIP_DOTS),
                     \RecursiveIteratorIterator::LEAVES_ONLY
                 );
 
@@ -183,13 +187,14 @@ class MetadataFactory
                     }
                 }
             } catch (\Exception $e) {
-                // Log or handle exception
-                error_log('Error scanning directory ' . $dir . ': ' . $e->getMessage());
+                // Log error with more detail
+                error_log('Error scanning directory ' . $dir . ': ' . $e->getMessage() . "\n" . $e->getTraceAsString());
             }
         }
 
         return $this->documentClasses;
     }
+
     public function getMappings(): array
     {
         return $this->mappings;
