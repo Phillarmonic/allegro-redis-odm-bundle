@@ -151,10 +151,37 @@ class DocumentManager
                 // Handle indices, first check for existing document to clean up old index values
                 $oldDoc = $this->identityMap[$key] ?? null;
 
+                // If we don't have the old document in the identity map,
+                // but the document exists in Redis, fetch it to properly update indices
+                if (!$oldDoc) {
+                    // Check if the document exists in Redis
+                    if ($metadata->storageType === 'hash') {
+                        $oldData = $this->redisClient->hGetAll($redisKey);
+                        if (!empty($oldData)) {
+                            // Hydrate the old document to compare values
+                            $oldDoc = $this->hydrator->hydrate($className, $oldData);
+                            // Set ID value
+                            $reflProperty = new \ReflectionProperty($className, $metadata->idField);
+                            $reflProperty->setAccessible(true);
+                            $reflProperty->setValue($oldDoc, $id);
+                        }
+                    } elseif ($metadata->storageType === 'json') {
+                        $jsonData = $this->redisClient->get($redisKey);
+                        if ($jsonData) {
+                            $oldData = json_decode($jsonData, true);
+                            $oldDoc = $this->hydrator->hydrate($className, $oldData);
+                            // Set ID value
+                            $reflProperty = new \ReflectionProperty($className, $metadata->idField);
+                            $reflProperty->setAccessible(true);
+                            $reflProperty->setValue($oldDoc, $id);
+                        }
+                    }
+                }
+
                 // For each indexed property, update index
                 foreach ($metadata->indices as $propertyName => $indexName) {
                     // Get the new value
-                    $reflProperty = new ReflectionProperty($className, $propertyName);
+                    $reflProperty = new \ReflectionProperty($className, $propertyName);
                     $reflProperty->setAccessible(true);
                     $newValue = $reflProperty->getValue($document);
 
@@ -183,7 +210,7 @@ class DocumentManager
                 if ($metadata->storageType === 'hash') {
                     $this->redisClient->hMSet($redisKey, $data);
                 } elseif ($metadata->storageType === 'json') {
-                    $this->redisClient->set($redisKey, json_encode($data));
+                    $this->redisClient->set($redisKey, json_encode($data, JSON_THROW_ON_ERROR));
                 }
 
                 // Set expiration if needed
