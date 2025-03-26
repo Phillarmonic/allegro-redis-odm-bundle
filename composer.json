@@ -2,10 +2,11 @@
     "name": "phillarmonic/allegro-redis-odm-bundle",
     "description": "Redis ODM (Object Document Mapper) for Symfony - store and retrieve PHP objects using Redis",
     "type": "symfony-bundle",
+    "version":"1.0.0",
     "license": "MIT",
     "authors": [
         {
-            "name": "Phillarmonic Team",
+            "name": "The Phillarmonkey Team",
             "homepage": "https://github.com/phillarmonic"
         }
     ],
