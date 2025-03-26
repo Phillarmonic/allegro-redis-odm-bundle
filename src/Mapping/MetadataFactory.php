@@ -130,7 +130,6 @@ class MetadataFactory
         return null;
     }
 
-
     /**
      * Get all document classes from configured mappings
      *
@@ -140,80 +139,95 @@ class MetadataFactory
     {
         // Return cached results if available
         if ($this->documentClasses !== null) {
-            error_log("Using cached document classes: " . count($this->documentClasses));
             return $this->documentClasses;
         }
 
         $this->documentClasses = [];
-        error_log("Scanning for document classes...");
+
+        // If no mappings are configured, return empty array
+        if (empty($this->mappings)) {
+            error_log("No mappings configured in MetadataFactory");
+            return [];
+        }
 
         // Scan each mapping directory for document classes
         foreach ($this->mappings as $mappingName => $mapping) {
             error_log("Processing mapping: " . $mappingName);
 
             if (!isset($mapping['dir'], $mapping['namespace'])) {
-                error_log("Missing dir or namespace in mapping");
+                error_log("Missing dir or namespace in mapping {$mappingName}");
                 continue;
             }
 
             $dir = $mapping['dir'];
             $namespace = $mapping['namespace'];
-            error_log("Scanning directory: " . $dir);
-            error_log("Using namespace: " . $namespace);
 
             if (!is_dir($dir)) {
-                error_log("Warning: Mapping directory '$dir' does not exist");
+                error_log("Warning: Mapping directory '{$dir}' does not exist");
                 continue;
             }
 
             try {
-                // Find PHP files in the directory and subdirectories
-                $finder = new \RecursiveIteratorIterator(
-                    new \RecursiveDirectoryIterator($dir, \RecursiveDirectoryIterator::SKIP_DOTS),
-                    \RecursiveIteratorIterator::LEAVES_ONLY
-                );
-
-                $fileCount = 0;
-                foreach ($finder as $file) {
-                    $fileCount++;
-                    // Skip directories and non-PHP files
-                    if ($file->isDir() || $file->getExtension() !== 'php') {
-                        continue;
-                    }
-
-                    error_log("Found PHP file: " . $file->getPathname());
-
-                    // Get relative path from the mapping directory
-                    $relativePath = str_replace($dir . DIRECTORY_SEPARATOR, '', $file->getRealPath());
-                    $relativePath = str_replace('\\', '/', $relativePath); // Normalize directory separators
-                    error_log("Relative path: " . $relativePath);
-
-                    // Convert file path to class name
-                    $relativeClass = str_replace('/', '\\', substr($relativePath, 0, -4)); // Remove .php
-                    $className = $namespace . '\\' . $relativeClass;
-                    error_log("Checking class: " . $className);
-
-                    // Check if class exists and is a document
-                    if (class_exists($className)) {
-                        error_log("Class exists");
-                        if ($this->isDocument($className)) {
-                            error_log("Class is a document: " . $className);
-                            $this->documentClasses[] = $className;
-                        } else {
-                            error_log("Class is not a document");
-                        }
-                    } else {
-                        error_log("Class does not exist: " . $className);
-                    }
-                }
-                error_log("Processed $fileCount files in $dir");
+                $this->scanDirectoryForDocuments($dir, $namespace);
             } catch (\Exception $e) {
-                error_log('Error scanning directory ' . $dir . ': ' . $e->getMessage() . "\n" . $e->getTraceAsString());
+                error_log('Error scanning directory ' . $dir . ': ' . $e->getMessage());
             }
         }
 
-        error_log("Found " . count($this->documentClasses) . " document classes");
         return $this->documentClasses;
+    }
+
+    /**
+     * Scan a directory for document classes
+     *
+     * @param string $dir Directory to scan
+     * @param string $namespace Base namespace for documents
+     */
+    private function scanDirectoryForDocuments(string $dir, string $namespace): void
+    {
+        $directoryIterator = new \RecursiveDirectoryIterator(
+            $dir,
+            \RecursiveDirectoryIterator::SKIP_DOTS
+        );
+
+        $iterator = new \RecursiveIteratorIterator(
+            $directoryIterator,
+            \RecursiveIteratorIterator::LEAVES_ONLY
+        );
+
+        $dirLength = strlen($dir);
+
+        foreach ($iterator as $file) {
+            // Skip non-PHP files
+            if ($file->getExtension() !== 'php') {
+                continue;
+            }
+
+            $filePath = $file->getRealPath();
+            $relativePath = substr($filePath, $dirLength);
+            // Remove leading directory separator if present
+            $relativePath = ltrim($relativePath, DIRECTORY_SEPARATOR);
+            // Replace directory separators with namespace separators
+            $relativePath = str_replace(DIRECTORY_SEPARATOR, '\\', $relativePath);
+            // Remove .php extension
+            $relativeClass = substr($relativePath, 0, -4);
+            // Construct full class name
+            $className = $namespace . '\\' . $relativeClass;
+
+            error_log("Found potential class: {$className}");
+
+            // Check if class exists (will trigger autoloading)
+            if (!class_exists($className)) {
+                error_log("Class {$className} does not exist or cannot be autoloaded");
+                continue;
+            }
+
+            // Check if it's a document class
+            if ($this->isDocument($className)) {
+                error_log("Found document class: {$className}");
+                $this->documentClasses[] = $className;
+            }
+        }
     }
 
     public function getMappings(): array

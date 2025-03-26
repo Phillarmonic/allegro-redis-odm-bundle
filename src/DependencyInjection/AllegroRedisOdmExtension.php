@@ -25,15 +25,51 @@ class AllegroRedisOdmExtension extends Extension
         $container->setParameter('allegro_redis_odm.connection', $config['connection']);
         $container->setParameter('allegro_redis_odm.client_type', $config['client_type']);
 
+        // Store default storage configuration
+        if (isset($config['default_storage'])) {
+            $container->setParameter('allegro_redis_odm.default_storage', $config['default_storage']);
+        }
+
         // Configure Redis client service based on client type
         $this->configureRedisClient($container, $config);
 
-        // Configure mapping paths
-        if (isset($config['mappings'])) {
-            $container->setParameter('allegro_redis_odm.mappings', $config['mappings']);
+        // Configure mapping paths - ensure this is set even if empty
+        if (isset($config['mappings']) && !empty($config['mappings'])) {
+            // Process mappings to resolve paths
+            $mappings = $this->processMappingsConfiguration($container, $config['mappings']);
+            $container->setParameter('allegro_redis_odm.mappings', $mappings);
         } else {
             $container->setParameter('allegro_redis_odm.mappings', []);
         }
+    }
+
+    /**
+     * Process mappings configuration to resolve paths and validate
+     */
+    private function processMappingsConfiguration(ContainerBuilder $container, array $mappings): array
+    {
+        $processedMappings = [];
+        $projectDir = $container->getParameter('kernel.project_dir');
+
+        foreach ($mappings as $name => $mapping) {
+            if (!isset($mapping['dir']) || !isset($mapping['namespace'])) {
+                continue;
+            }
+
+            // Resolve directory path if it's relative
+            $dir = $mapping['dir'];
+            if (!file_exists($dir) || !is_dir($dir)) {
+                // Try to resolve as relative to project root
+                $resolvedDir = $projectDir . '/' . $dir;
+                if (is_dir($resolvedDir)) {
+                    $mapping['dir'] = $resolvedDir;
+                }
+            }
+
+            $processedMappings[$name] = $mapping;
+        }
+
+        return $processedMappings;
     }
 
     private function configureRedisClient(ContainerBuilder $container, array $config)
