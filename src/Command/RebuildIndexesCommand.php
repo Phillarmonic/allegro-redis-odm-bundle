@@ -4,6 +4,7 @@ namespace Phillarmonic\AllegroRedisOdmBundle\Command;
 
 use Phillarmonic\AllegroRedisOdmBundle\DocumentManager;
 use Phillarmonic\AllegroRedisOdmBundle\Mapping\MetadataFactory;
+use Phillarmonic\AllegroRedisOdmBundle\Service\MappingDebuggerService;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -20,6 +21,7 @@ class RebuildIndexesCommand extends Command
     public function __construct(
         private readonly DocumentManager $documentManager,
         private readonly MetadataFactory $metadataFactory,
+        private readonly MappingDebuggerService $mappingDebugger
     ) {
         parent::__construct();
     }
@@ -30,7 +32,8 @@ class RebuildIndexesCommand extends Command
             ->addOption('class', 'c', InputOption::VALUE_REQUIRED, 'Limit to a specific document class')
             ->addOption('batch-size', 'b', InputOption::VALUE_REQUIRED, 'Number of documents to process in each batch', 100)
             ->addOption('clear-indexes', null, InputOption::VALUE_NONE, 'Clear existing indexes before rebuilding')
-            ->addOption('force', 'f', InputOption::VALUE_NONE, 'Skip confirmation prompt');
+            ->addOption('force', 'f', InputOption::VALUE_NONE, 'Skip confirmation prompt')
+            ->addOption('show-mappings', 'm', InputOption::VALUE_NONE, 'Show detailed mappings information');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -38,13 +41,19 @@ class RebuildIndexesCommand extends Command
         $io = new SymfonyStyle($input, $output);
         $io->title('Redis ODM Index Rebuild');
 
-         $io->section('Configured Mappings:');
-        $mappingsConfig = $this->metadataFactory->getMappings(); // You would need to add this method
-        foreach ($mappingsConfig as $name => $mapping) {
-            $io->text("Mapping: $name");
-            $io->text("  Directory: " . ($mapping['dir'] ?? 'Not set'));
-            $io->text("  Namespace: " . ($mapping['namespace'] ?? 'Not set'));
-            $io->text("  Exists: " . (is_dir($mapping['dir'] ?? '') ? 'Yes' : 'No'));
+        // Display mappings information if requested
+        if ($input->getOption('show-mappings')) {
+            $this->mappingDebugger->displayMappingsInfo($io);
+        } else {
+            // Just show a simplified version
+            $io->section('Configured Mappings:');
+            $mappingsConfig = $this->metadataFactory->getMappings();
+            foreach ($mappingsConfig as $name => $mapping) {
+                $io->text("Mapping: $name");
+                $io->text("  Directory: " . ($mapping['dir'] ?? 'Not set'));
+                $io->text("  Namespace: " . ($mapping['namespace'] ?? 'Not set'));
+                $io->text("  Exists: " . (is_dir($mapping['dir'] ?? '') ? 'Yes' : 'No'));
+            }
         }
 
         $specificClass = $input->getOption('class');
@@ -62,8 +71,8 @@ class RebuildIndexesCommand extends Command
 
             $classesToProcess[] = $specificClass;
         } else {
-            // Process all registered document classes
-            $classesToProcess = $this->metadataFactory->getAllDocumentClasses();
+            // Get all document classes using the debugger
+            $classesToProcess = $this->mappingDebugger->getAllDocumentClasses();
 
             if (empty($classesToProcess)) {
                 $io->warning('No document classes found - check your mappings configuration');

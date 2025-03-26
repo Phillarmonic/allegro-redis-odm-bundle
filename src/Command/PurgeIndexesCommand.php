@@ -2,9 +2,9 @@
 
 namespace Phillarmonic\AllegroRedisOdmBundle\Command;
 
-use Phillarmonic\AllegroRedisOdmBundle\Client\RedisClientAdapter;
 use Phillarmonic\AllegroRedisOdmBundle\DocumentManager;
 use Phillarmonic\AllegroRedisOdmBundle\Mapping\MetadataFactory;
+use Phillarmonic\AllegroRedisOdmBundle\Service\MappingDebuggerService;
 use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
@@ -21,6 +21,7 @@ class PurgeIndexesCommand extends Command
     public function __construct(
         private readonly DocumentManager $documentManager,
         private readonly MetadataFactory $metadataFactory,
+        private readonly MappingDebuggerService $mappingDebugger
     ) {
         parent::__construct();
     }
@@ -30,13 +31,19 @@ class PurgeIndexesCommand extends Command
         $this
             ->addOption('dry-run', null, InputOption::VALUE_NONE, 'Show what would be deleted without actually deleting')
             ->addOption('class', 'c', InputOption::VALUE_REQUIRED, 'Limit to a specific document class')
-            ->addOption('index-name', 'i', InputOption::VALUE_REQUIRED, 'Limit to a specific index name');
+            ->addOption('index-name', 'i', InputOption::VALUE_REQUIRED, 'Limit to a specific index name')
+            ->addOption('show-mappings', 'm', InputOption::VALUE_NONE, 'Show detailed mappings information');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
         $io->title('Redis ODM Index Purge');
+
+        // Display mappings information if requested
+        if ($input->getOption('show-mappings')) {
+            $this->mappingDebugger->displayMappingsInfo($io);
+        }
 
         $dryRun = (bool) $input->getOption('dry-run');
         $specificClass = $input->getOption('class');
@@ -60,17 +67,13 @@ class PurgeIndexesCommand extends Command
 
             $classesToProcess[] = $specificClass;
         } else {
-            // Process all registered document classes
-            // This would require a way to find all document classes
-            // For simplicity, just use what's in memory for now
-            $registeredMetadata = $this->getAllDocumentClasses();
+            // Process all registered document classes using the debugger
+            $classesToProcess = $this->mappingDebugger->getAllDocumentClasses();
 
-            if (empty($registeredMetadata)) {
+            if (empty($classesToProcess)) {
                 $io->warning('No document classes found - check your mappings configuration');
                 return Command::SUCCESS;
             }
-
-            $classesToProcess = $registeredMetadata;
         }
 
         $io->section('Processing document classes:');
@@ -153,13 +156,5 @@ class PurgeIndexesCommand extends Command
         ));
 
         return Command::SUCCESS;
-    }
-
-    /**
-     * Get all document classes from the metadata factory
-     */
-    private function getAllDocumentClasses(): array
-    {
-        return $this->metadataFactory->getAllDocumentClasses();
     }
 }

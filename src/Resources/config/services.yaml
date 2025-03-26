@@ -28,6 +28,19 @@ services:
             - '@parameter_bag'  # Pass the entire parameter bag instead of just the mappings
         public: true
 
+    # Added MappingDebugger service
+    allegro_redis_odm.mapping_debugger:
+        class: Phillarmonic\AllegroRedisOdmBundle\Service\MappingDebuggerService
+        arguments:
+            - '@allegro_redis_odm.metadata_factory'
+            - '@service_container'
+        public: true
+
+    # Aliasing the service for autowiring
+    Phillarmonic\AllegroRedisOdmBundle\Service\MappingDebuggerService:
+        alias: 'allegro_redis_odm.mapping_debugger'
+        public: true
+
     allegro_redis_odm.hydrator:
         class: Phillarmonic\AllegroRedisOdmBundle\Hydrator\Hydrator
         arguments:
@@ -52,6 +65,20 @@ services:
 
     Phillarmonic\AllegroRedisOdmBundle\Command\DebugMappingsCommand:
         arguments:
+            - '@allegro_redis_odm.mapping_debugger'
             - '@allegro_redis_odm.metadata_factory'
-            - '@service_container'
+        tags: [ 'console.command' ]
+
+    Phillarmonic\AllegroRedisOdmBundle\Command\RebuildIndexesCommand:
+        arguments:
+            - '@allegro_redis_odm.document_manager'
+            - '@allegro_redis_odm.metadata_factory'
+            - '@allegro_redis_odm.mapping_debugger'
+        tags: [ 'console.command' ]
+
+    Phillarmonic\AllegroRedisOdmBundle\Command\PurgeIndexesCommand:
+        arguments:
+            - '@allegro_redis_odm.document_manager'
+            - '@allegro_redis_odm.metadata_factory'
+            - '@allegro_redis_odm.mapping_debugger'
         tags: [ 'console.command' ]
