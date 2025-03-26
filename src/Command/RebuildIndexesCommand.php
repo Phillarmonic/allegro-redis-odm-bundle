@@ -192,10 +192,15 @@ class RebuildIndexesCommand extends Command
      */
     private function processBatch(array $documents): void
     {
+        // Enable force rebuild of indexes before processing the batch
+        $this->documentManager->enableForceRebuildIndexes();
+
         foreach ($documents as $document) {
             $this->documentManager->persist($document);
         }
+
         $this->documentManager->flush();
+        // No need to explicitly disable, as flush() resets it automatically
     }
 
     /**

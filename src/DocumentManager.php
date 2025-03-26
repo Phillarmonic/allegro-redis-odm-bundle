@@ -15,6 +15,7 @@ class DocumentManager
     private array $identityMap = [];
     private array $unitOfWork = [];
     private array $originalData = []; // Add a new property to store original entity data
+    private bool $forceRebuildIndexes = false; // Flag to force index rebuild
 
     public function __construct(
         private RedisClientAdapter $redisClient,
@@ -38,6 +39,22 @@ class DocumentManager
         }
 
         return $this->repositories[$documentClass];
+    }
+
+    /**
+     * Enable force rebuilding of all indexes on next flush
+     */
+    public function enableForceRebuildIndexes(): void
+    {
+        $this->forceRebuildIndexes = true;
+    }
+
+    /**
+     * Disable force rebuilding of indexes
+     */
+    public function disableForceRebuildIndexes(): void
+    {
+        $this->forceRebuildIndexes = false;
     }
 
     public function find(string $documentClass, string $id)
@@ -241,10 +258,15 @@ class DocumentManager
                         }
                     }
 
-                    // If values are different, update indices
-                    if ($oldValue !== $newValue) {
-                        // Remove old index if it existed
-                        if ($oldValue !== null) {
+                    // Check if we need to update the index
+                    $shouldUpdateIndex = false;
+
+                    // Update index if:
+                    // 1. We're forcing a rebuild of all indexes, or
+                    // 2. The values are different
+                    if ($this->forceRebuildIndexes || $oldValue !== $newValue) {
+                        // Always remove old index in case it existed
+                        if ($oldValue !== null && !$this->forceRebuildIndexes) {
                             $oldIndexKey = $metadata->getIndexKeyName($indexName, $oldValue);
                             $this->redisClient->sRem($oldIndexKey, $id);
                         }
@@ -279,6 +301,9 @@ class DocumentManager
 
         // Clear unit of work
         $this->unitOfWork = [];
+
+        // Reset the force rebuild flag after flushing
+        $this->forceRebuildIndexes = false;
     }
 
     public function clear(): void
