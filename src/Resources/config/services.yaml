@@ -47,5 +47,5 @@ services:
         exclude: '../../Mapping/{ClassMetadata.php}'
 
     Phillarmonic\AllegroRedisOdmBundle\Command\:
-        resource: '../Command/*'
+        resource: '../../Command/*'
         tags: [ 'console.command' ]
