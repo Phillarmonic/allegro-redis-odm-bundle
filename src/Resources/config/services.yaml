@@ -25,7 +25,7 @@ services:
     allegro_redis_odm.metadata_factory:
         class: Phillarmonic\AllegroRedisOdmBundle\Mapping\MetadataFactory
         arguments:
-            - '%allegro_redis_odm.mappings%'
+            - '@parameter_bag'  # Pass the entire parameter bag instead of just the mappings
         public: true
 
     allegro_redis_odm.hydrator:

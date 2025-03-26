@@ -4,6 +4,7 @@ namespace Phillarmonic\AllegroRedisOdmBundle\Mapping;
 
 use ReflectionClass;
 use ReflectionProperty;
+use Symfony\Component\DependencyInjection\ParameterBag\ParameterBagInterface;
 
 class MetadataFactory
 {
@@ -11,9 +12,24 @@ class MetadataFactory
     private array $mappings = [];
     private ?array $documentClasses = null;
 
-    public function __construct(array $mappings = [])
+    /**
+     * Constructor accepts either direct mappings array or a parameter bag to fetch from container
+     *
+     * @param array|ParameterBagInterface $mappingsOrParams Either mappings array or container parameters
+     */
+    public function __construct($mappingsOrParams = [])
     {
-        $this->mappings = $mappings;
+        // If we received a parameter bag, extract mappings from it
+        if ($mappingsOrParams instanceof ParameterBagInterface) {
+            $this->mappings = $mappingsOrParams->get('allegro_redis_odm.mappings');
+        }
+        // Otherwise, use the provided mappings directly
+        else if (is_array($mappingsOrParams)) {
+            $this->mappings = $mappingsOrParams;
+        }
+
+        // Log the mappings we received for debugging
+        error_log("MetadataFactory initialized with mappings: " . print_r($this->mappings, true));
     }
 
     public function getMetadataFor(string $className): ClassMetadata
