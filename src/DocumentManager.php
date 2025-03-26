@@ -7,7 +7,6 @@ use Phillarmonic\AllegroRedisOdmBundle\Hydrator\Hydrator;
 use Phillarmonic\AllegroRedisOdmBundle\Mapping\ClassMetadata;
 use Phillarmonic\AllegroRedisOdmBundle\Mapping\MetadataFactory;
 use Phillarmonic\AllegroRedisOdmBundle\Repository\DocumentRepository;
-use Phillarmonic\AllegroRedisOdmBundle\Repository\RepositoryFactory;
 use ReflectionProperty;
 
 class DocumentManager
@@ -15,6 +14,7 @@ class DocumentManager
     private array $repositories = [];
     private array $identityMap = [];
     private array $unitOfWork = [];
+    private array $originalData = []; // Add a new property to store original entity data
 
     public function __construct(
         private RedisClientAdapter $redisClient,
@@ -77,6 +77,9 @@ class DocumentManager
         // Add to identity map
         $this->identityMap[$mapKey] = $document;
 
+        // Store original data for later comparison
+        $this->originalData[$mapKey] = $data;
+
         return $document;
     }
 
@@ -102,6 +105,64 @@ class DocumentManager
 
         // Add to unit of work
         $this->unitOfWork[$className . ':' . $id] = $document;
+
+        // If this is an existing document not in identity map/original data, fetch it first
+        $mapKey = $className . ':' . $id;
+        if (!isset($this->originalData[$mapKey]) && !$this->isNewDocument($document)) {
+            $this->fetchOriginalData($document, $id, $metadata);
+        }
+    }
+
+    /**
+     * Check if a document is new (not yet stored in Redis)
+     */
+    private function isNewDocument($document): bool
+    {
+        $className = get_class($document);
+        $metadata = $this->metadataFactory->getMetadataFor($className);
+
+        // Get ID value
+        $reflProperty = new ReflectionProperty($className, $metadata->idField);
+        $reflProperty->setAccessible(true);
+        $id = $reflProperty->getValue($document);
+
+        // If no ID or auto-generated ID that hasn't been persisted yet
+        if (empty($id)) {
+            return true;
+        }
+
+        // Check if document exists in Redis
+        $key = $metadata->getKeyName($id);
+        if ($metadata->storageType === 'hash') {
+            $data = $this->redisClient->hGetAll($key);
+            return empty($data);
+        } elseif ($metadata->storageType === 'json') {
+            return !$this->redisClient->exists($key);
+        }
+
+        return true;
+    }
+
+    /**
+     * Fetch original data for an existing document
+     */
+    private function fetchOriginalData($document, string $id, ClassMetadata $metadata): void
+    {
+        $className = get_class($document);
+        $key = $metadata->getKeyName($id);
+        $mapKey = $className . ':' . $id;
+
+        if ($metadata->storageType === 'hash') {
+            $data = $this->redisClient->hGetAll($key);
+            if (!empty($data)) {
+                $this->originalData[$mapKey] = $data;
+            }
+        } elseif ($metadata->storageType === 'json') {
+            $jsonData = $this->redisClient->get($key);
+            if ($jsonData) {
+                $this->originalData[$mapKey] = json_decode($jsonData, true);
+            }
+        }
     }
 
     public function remove($document): void
@@ -142,53 +203,42 @@ class DocumentManager
                 // Remove any indices
                 $this->cleanupDocumentIndices($className, $id, $metadata);
 
-                // Remove from identity map
+                // Remove from identity map and original data
                 unset($this->identityMap[$key]);
+                unset($this->originalData[$key]);
             } else {
                 // Extract data from document
                 $data = $this->hydrator->extract($document);
 
-                // Handle indices, first check for existing document to clean up old index values
-                $oldDoc = $this->identityMap[$key] ?? null;
-
-                // If we don't have the old document in the identity map,
-                // but the document exists in Redis, fetch it to properly update indices
-                if (!$oldDoc) {
-                    // Check if the document exists in Redis
-                    if ($metadata->storageType === 'hash') {
-                        $oldData = $this->redisClient->hGetAll($redisKey);
-                        if (!empty($oldData)) {
-                            // Hydrate the old document to compare values
-                            $oldDoc = $this->hydrator->hydrate($className, $oldData);
-                            // Set ID value
-                            $reflProperty = new \ReflectionProperty($className, $metadata->idField);
-                            $reflProperty->setAccessible(true);
-                            $reflProperty->setValue($oldDoc, $id);
-                        }
-                    } elseif ($metadata->storageType === 'json') {
-                        $jsonData = $this->redisClient->get($redisKey);
-                        if ($jsonData) {
-                            $oldData = json_decode($jsonData, true);
-                            $oldDoc = $this->hydrator->hydrate($className, $oldData);
-                            // Set ID value
-                            $reflProperty = new \ReflectionProperty($className, $metadata->idField);
-                            $reflProperty->setAccessible(true);
-                            $reflProperty->setValue($oldDoc, $id);
-                        }
-                    }
-                }
-
                 // For each indexed property, update index
                 foreach ($metadata->indices as $propertyName => $indexName) {
                     // Get the new value
-                    $reflProperty = new \ReflectionProperty($className, $propertyName);
+                    $reflProperty = new ReflectionProperty($className, $propertyName);
                     $reflProperty->setAccessible(true);
                     $newValue = $reflProperty->getValue($document);
 
                     // Get the old value if there was one
                     $oldValue = null;
-                    if ($oldDoc) {
-                        $oldValue = $reflProperty->getValue($oldDoc);
+                    if (isset($this->originalData[$key])) {
+                        $fieldName = $metadata->getFieldName($propertyName);
+                        $oldValue = $this->originalData[$key][$fieldName] ?? null;
+
+                        // Convert to appropriate PHP type if needed
+                        $fieldType = $metadata->getFieldType($propertyName);
+                        if ($fieldType && $oldValue !== null) {
+                            switch ($fieldType) {
+                                case 'boolean':
+                                    $oldValue = (bool) $oldValue;
+                                    break;
+                                case 'integer':
+                                    $oldValue = (int) $oldValue;
+                                    break;
+                                case 'float':
+                                    $oldValue = (float) $oldValue;
+                                    break;
+                                // Add other type conversions as needed
+                            }
+                        }
                     }
 
                     // If values are different, update indices
@@ -210,7 +260,7 @@ class DocumentManager
                 if ($metadata->storageType === 'hash') {
                     $this->redisClient->hMSet($redisKey, $data);
                 } elseif ($metadata->storageType === 'json') {
-                    $this->redisClient->set($redisKey, json_encode($data, JSON_THROW_ON_ERROR));
+                    $this->redisClient->set($redisKey, json_encode($data));
                 }
 
                 // Set expiration if needed
@@ -218,8 +268,9 @@ class DocumentManager
                     $this->redisClient->expire($redisKey, $metadata->ttl);
                 }
 
-                // Add to identity map
+                // Update identity map and original data
                 $this->identityMap[$key] = $document;
+                $this->originalData[$key] = $data;
             }
         }
 
@@ -234,6 +285,7 @@ class DocumentManager
     {
         $this->identityMap = [];
         $this->unitOfWork = [];
+        $this->originalData = [];
     }
 
     public function getRedisClient(): RedisClientAdapter
@@ -267,13 +319,21 @@ class DocumentManager
     private function cleanupDocumentIndices(string $className, string $id, ClassMetadata $metadata): void
     {
         $oldDoc = $this->identityMap[$className . ':' . $id] ?? null;
+        $originalData = $this->originalData[$className . ':' . $id] ?? null;
 
-        if ($oldDoc) {
-            // If we have the old document in identity map, remove specific indices
+        if ($oldDoc || $originalData) {
+            // If we have the old document in identity map or original data, remove specific indices
             foreach ($metadata->indices as $propertyName => $indexName) {
-                $reflProperty = new ReflectionProperty($className, $propertyName);
-                $reflProperty->setAccessible(true);
-                $oldValue = $reflProperty->getValue($oldDoc);
+                $oldValue = null;
+
+                if ($oldDoc) {
+                    $reflProperty = new ReflectionProperty($className, $propertyName);
+                    $reflProperty->setAccessible(true);
+                    $oldValue = $reflProperty->getValue($oldDoc);
+                } elseif ($originalData) {
+                    $fieldName = $metadata->getFieldName($propertyName);
+                    $oldValue = $originalData[$fieldName] ?? null;
+                }
 
                 if ($oldValue !== null) {
                     $indexKey = $metadata->getIndexKeyName($indexName, $oldValue);
