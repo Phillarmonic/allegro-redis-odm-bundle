@@ -75,7 +75,7 @@ Create document classes in your project:
 
 ```php
 <?php
-// src/Document/User.php
+// src/Document/Article.php
 namespace App\Document;
 
 use Phillarmonic\AllegroRedisOdmBundle\Mapping\Document;
@@ -85,26 +85,36 @@ use Phillarmonic\AllegroRedisOdmBundle\Mapping\Index;
 use Phillarmonic\AllegroRedisOdmBundle\Mapping\RedisHash;
 use Phillarmonic\AllegroRedisOdmBundle\Mapping\Expiration;
 
-#[Document(collection: 'users')]
+#[Document(collection: 'articles')]
 #[RedisHash]
 #[Expiration(ttl: 3600)] // Optional: 1-hour expiration
-class User
+class Article
 {
     #[Id]
     private ?string $id = null;
     
     #[Field]
     #[Index]
-    private string $email;
+    private string $slug;
     
-    #[Field(name: 'username', nullable: false)]
-    private string $username;
+    #[Field(name: 'title', nullable: false)]
+    private string $title;
+    
+    #[Field(type: 'string', nullable: true)]
+    private ?string $content = null;
+    
+    #[Field]
+    #[Index]
+    private string $category;
+    
+    #[Field(type: 'boolean')]
+    private bool $isPublished = false;
     
     #[Field(type: 'integer')]
-    private int $loginCount = 0;
+    private int $viewCount = 0;
     
     #[Field(type: 'datetime')]
-    private ?\DateTime $lastLogin = null;
+    private ?\DateTime $publishedAt = null;
     
     // Getters and setters...
     
@@ -113,14 +123,25 @@ class User
         return $this->id;
     }
     
-    public function getEmail(): string
+    public function getSlug(): string
     {
-        return $this->email;
+        return $this->slug;
     }
     
-    public function setEmail(string $email): self
+    public function setSlug(string $slug): self
     {
-        $this->email = $email;
+        $this->slug = $slug;
+        return $this;
+    }
+    
+    public function getTitle(): string
+    {
+        return $this->title;
+    }
+    
+    public function setTitle(string $title): self
+    {
+        $this->title = $title;
         return $this;
     }
     
@@ -136,38 +157,39 @@ Inject the `DocumentManager` into your services:
 <?php
 namespace App\Service;
 
-use App\Document\User;
+use App\Document\Article;
 use Phillarmonic\AllegroRedisOdmBundle\DocumentManager;
 
-class UserService
+class ArticleService
 {
     public function __construct(
         private DocumentManager $documentManager
     ) {
     }
     
-    public function createUser(string $email, string $username): User
+    public function createArticle(string $title, string $slug, string $category): Article
     {
-        $user = new User();
-        $user->setEmail($email);
-        $user->setUsername($username);
-        $user->setLastLogin(new \DateTime());
+        $article = new Article();
+        $article->setTitle($title);
+        $article->setSlug($slug);
+        $article->setCategory($category);
+        $article->setPublishedAt(new \DateTime());
         
-        $this->documentManager->persist($user);
+        $this->documentManager->persist($article);
         $this->documentManager->flush();
         
-        return $user;
+        return $article;
     }
     
-    public function findUserById(string $id): ?User
+    public function findArticleById(string $id): ?Article
     {
-        return $this->documentManager->find(User::class, $id);
+        return $this->documentManager->find(Article::class, $id);
     }
     
-    public function findUserByEmail(string $email): ?User
+    public function findArticleBySlug(string $slug): ?Article
     {
-        $repository = $this->documentManager->getRepository(User::class);
-        return $repository->findOneBy(['email' => $email]);
+        $repository = $this->documentManager->getRepository(Article::class);
+        return $repository->findOneBy(['slug' => $slug]);
     }
 }
 ```
@@ -218,47 +240,47 @@ The bundle provides a `DocumentRepository` class with several finder methods sim
 // Example controller or service using repositories
 namespace App\Controller;
 
-use App\Document\User;
+use App\Document\Article;
 use App\Document\Product;
 use Phillarmonic\AllegroRedisOdmBundle\DocumentManager;
 use Symfony\Component\HttpFoundation\Response;
 
-class UserController extends AbstractController
+class ArticleController extends AbstractController
 {
     public function __construct(
         private DocumentManager $documentManager
     ) {
     }
     
-    public function listUsers(): Response
+    public function listArticles(): Response
     {
-        $userRepository = $this->documentManager->getRepository(User::class);
+        $articleRepository = $this->documentManager->getRepository(Article::class);
         
         // Find a single document by ID
-        $user = $userRepository->find('user123');
+        $article = $articleRepository->find('article123');
         
         // Find all documents
-        $allUsers = $userRepository->findAll();
+        $allArticles = $articleRepository->findAll();
         
         // Find by criteria - uses indexed fields when available
-        $activeAdmins = $userRepository->findBy([
-            'status' => 'active',
-            'role' => 'admin'
+        $publishedTechArticles = $articleRepository->findBy([
+            'isPublished' => true,
+            'category' => 'technology'
         ]);
         
         // Find with ordering, limit and offset
-        $recentUsers = $userRepository->findBy(
-            ['status' => 'active'],
-            ['createdAt' => 'DESC'],  // Order by createdAt descending
-            10,                      // Limit to 10 results
-            0                        // Start from offset 0
+        $recentArticles = $articleRepository->findBy(
+            ['isPublished' => true],
+            ['publishedAt' => 'DESC'],  // Order by publishedAt descending
+            10,                         // Limit to 10 results
+            0                           // Start from offset 0
         );
         
         // Find a single document by criteria
-        $user = $userRepository->findOneBy(['email' => 'john@example.com']);
+        $article = $articleRepository->findOneBy(['slug' => 'introduction-to-redis']);
         
         // Count documents
-        $totalCount = $userRepository->count();
+        $totalCount = $articleRepository->count();
         
         // ... controller logic
     }
@@ -271,29 +293,29 @@ You can create custom repository classes for more specific queries:
 
 ```php
 <?php
-// src/Document/Repository/UserRepository.php
+// src/Document/Repository/ArticleRepository.php
 namespace App\Document\Repository;
 
-use App\Document\User;
+use App\Document\Article;
 use Phillarmonic\AllegroRedisOdmBundle\Repository\DocumentRepository;
 
-class UserRepository extends DocumentRepository
+class ArticleRepository extends DocumentRepository
 {
-    public function findActiveUsers(): array
+    public function findRecentArticles(int $days = 30): array
     {
-        $allUsers = $this->findAll();
-        $activeUsers = [];
+        $allArticles = $this->findAll();
+        $recentArticles = [];
         
-        foreach ($allUsers as $user) {
-            if ($user->getLastLogin() && $user->getLastLogin() > new \DateTime('-30 days')) {
-                $activeUsers[] = $user;
+        foreach ($allArticles as $article) {
+            if ($article->getPublishedAt() && $article->getPublishedAt() > new \DateTime('-' . $days . ' days')) {
+                $recentArticles[] = $article;
             }
         }
         
-        return $activeUsers;
+        return $recentArticles;
     }
     
-    public function findByUsernamePattern(string $pattern): array
+    public function findByTitlePattern(string $pattern): array
     {
         // Using lower-level Redis client via document manager
         $redisClient = $this->documentManager->getRedisClient();
@@ -309,11 +331,11 @@ class UserRepository extends DocumentRepository
             $id = end($parts);
             
             // Find the document
-            $user = $this->find($id);
+            $article = $this->find($id);
             
             // Apply custom filtering
-            if ($user && str_contains(strtolower($user->getUsername()), strtolower($pattern))) {
-                $result[] = $user;
+            if ($article && str_contains(strtolower($article->getTitle()), strtolower($pattern))) {
+                $result[] = $article;
             }
         }
         
@@ -431,9 +453,9 @@ allegro_redis_odm:
 To use the JSON storage format:
 
 ```php
-#[Document(collection: 'products')]
+#[Document(collection: 'articles')]
 #[RedisJson]
-class Product
+class Article
 {
     // Document properties...
 }
