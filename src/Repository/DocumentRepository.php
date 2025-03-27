@@ -69,10 +69,18 @@ class DocumentRepository
         $scanCount = min(($limit ?? 1000), 1000); // Set a reasonable scan count
 
         do {
-            [$cursor, $scanKeys] = $redisClient->scan($cursor ?? 0, $searchPattern, $scanCount);
+            // FIXED: Use options array for phpredis compatibility
+            $options = [
+                'match' => $searchPattern,
+                'count' => $scanCount
+            ];
+            [$cursor, $scanKeys] = $redisClient->scan($cursor ?? 0, $options);
 
             if (!empty($scanKeys)) {
-                $keys = array_merge($keys, $scanKeys);
+                // OPTIMIZATION: Avoid array_merge in a loop by directly appending keys
+                foreach ($scanKeys as $key) {
+                    $keys[] = $key;
+                }
             }
 
             // Stop if we have enough keys for the requested limit + offset

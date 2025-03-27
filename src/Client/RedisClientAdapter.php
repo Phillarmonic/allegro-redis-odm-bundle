@@ -389,47 +389,25 @@ class RedisClientAdapter
             return null;
         }
     }
+
     /**
      * Scan the keyspace for matching keys
      *
      * @param int $cursor The cursor returned by the previous call, or 0 for the first call
-     * @param string|null $pattern Pattern to match keys against
-     * @param int|null $count Number of elements to return per iteration (Redis might return more or less)
+     * @param string|array $pattern Pattern to match keys against or options array with 'match' and 'count'
+     * @param int|null $count Number of elements to return per iteration (ignored if $pattern is an array)
      * @return array [new cursor, array of keys]
      */
-    /**
-     * Scan the keyspace for matching keys
-     *
-     * @param int $cursor The cursor returned by the previous call, or 0 for the first call
-     * @param string|array|null $pattern Pattern to match keys against, or options array
-     * @param int|null $count Number of elements to return per iteration (Redis might return more or less)
-     * @return array [new cursor, array of keys]
-     */
-    public function scan(int $cursor, $pattern = null, ?int $count = null): array
+    public function scan(int $cursor, $pattern, ?int $count = null): array
     {
         try {
-            if ($this->clientType === 'phpredis') {
-                // Handle case when pattern is an array of options
-                if (is_array($pattern)) {
+            // Handle case when an options array is passed
+            if (is_array($pattern)) {
+                if ($this->clientType === 'phpredis') {
+                    // PhpRedis expects an options array
                     return $this->client->scan($cursor, $pattern);
-                }
-
-                // Otherwise, build options array
-                $options = [];
-
-                if ($pattern !== null) {
-                    $options['match'] = $pattern;
-                }
-
-                if ($count !== null) {
-                    $options['count'] = $count;
-                }
-
-                return $this->client->scan($cursor, $options);
-            } else {
-                // For Predis, the scan command has a different signature
-                // Handle case when pattern is an array of options
-                if (is_array($pattern)) {
+                } else {
+                    // For Predis, we need to convert the options array to arguments
                     $args = [$cursor];
 
                     if (isset($pattern['match'])) {
@@ -443,8 +421,23 @@ class RedisClientAdapter
                     }
 
                     $result = $this->client->scan(...$args);
+                }
+            } else {
+                // Handle case when a string pattern is passed
+                if ($this->clientType === 'phpredis') {
+                    $options = [];
+
+                    if ($pattern !== null) {
+                        $options['match'] = $pattern;
+                    }
+
+                    if ($count !== null) {
+                        $options['count'] = $count;
+                    }
+
+                    return $this->client->scan($cursor, $options);
                 } else {
-                    // Original string pattern handling
+                    // For Predis with string pattern
                     $args = [$cursor];
 
                     if ($pattern !== null) {
@@ -459,17 +452,18 @@ class RedisClientAdapter
 
                     $result = $this->client->scan(...$args);
                 }
-
-                // Predis returns an array with cursor as first element and keys as the second
-                if (is_array($result) && count($result) === 2) {
-                    return [$result[0], $result[1]]; // [cursor, keys]
-                }
-
-                return [0, []]; // Fallback for unexpected response
             }
+
+            // For Predis, normalize the result
+            if (isset($result) && is_array($result) && count($result) === 2) {
+                return [$result[0], $result[1]]; // [cursor, keys]
+            }
+
+            return [0, []]; // Fallback for unexpected response
         } catch (\Exception $e) {
             error_log('Error in scan: ' . $e->getMessage());
             return [0, []]; // Return empty result on error
         }
     }
+
 }
