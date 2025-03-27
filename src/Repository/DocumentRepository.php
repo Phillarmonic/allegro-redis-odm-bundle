@@ -74,7 +74,7 @@ class DocumentRepository
                 'match' => $searchPattern,
                 'count' => $scanCount
             ];
-            [$cursor, $scanKeys] = $redisClient->scan($cursor ?? 0, $searchPattern, $scanCount);
+            [$cursor, $scanKeys] = $redisClient->scan($cursor ?? 0, ['match' => $searchPattern, 'count' => $scanCount]);
 
             if (!empty($scanKeys)) {
                 // OPTIMIZATION: Avoid array_merge in a loop by directly appending keys
@@ -303,7 +303,7 @@ class DocumentRepository
 
         do {
             // FIX: Pass pattern as string instead of array
-            [$cursor, $keys] = $redisClient->scan($cursor ?? 0, $pattern, 1000);
+            [$cursor, $keys] = $redisClient->scan($cursor ?? 0, ['match' => $pattern, 'count' => 1000]);
             $count += count($keys);
         } while ($cursor != 0);
 
@@ -413,7 +413,7 @@ class DocumentRepository
 
         // Otherwise, scan through all documents
         do {
-            [$cursor, $keys] = $redisClient->scan($cursor ?? 0, $pattern, $batchSize);
+            [$cursor, $keys] = $redisClient->scan($cursor ?? 0, ['match' => $pattern, 'count' => $batchSize]);
 
             $batch = [];
 

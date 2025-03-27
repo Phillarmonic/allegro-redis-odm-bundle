@@ -398,65 +398,47 @@ class RedisClientAdapter
      * @param int|null $count Number of elements to return per iteration (ignored if $pattern is an array)
      * @return array [new cursor, array of keys]
      */
+
     public function scan(int $cursor, $pattern, ?int $count = null): array
     {
         try {
-            // Handle case when an options array is passed
+            // Normalize the arguments to always use an options array internally
+            $options = [];
+
             if (is_array($pattern)) {
-                if ($this->clientType === 'phpredis') {
-                    // PhpRedis expects an options array
-                    return $this->client->scan($cursor, $pattern);
-                } else {
-                    // For Predis, we need to convert the options array to arguments
-                    $args = [$cursor];
-
-                    if (isset($pattern['match'])) {
-                        $args[] = 'MATCH';
-                        $args[] = $pattern['match'];
-                    }
-
-                    if (isset($pattern['count'])) {
-                        $args[] = 'COUNT';
-                        $args[] = $pattern['count'];
-                    }
-
-                    $result = $this->client->scan(...$args);
-                }
+                $options = $pattern;
             } else {
-                // Handle case when a string pattern is passed
-                if ($this->clientType === 'phpredis') {
-                    $options = [];
-
-                    if ($pattern !== null) {
-                        $options['match'] = $pattern;
-                    }
-
-                    if ($count !== null) {
-                        $options['count'] = $count;
-                    }
-
-                    return $this->client->scan($cursor, $options);
-                } else {
-                    // For Predis with string pattern
-                    $args = [$cursor];
-
-                    if ($pattern !== null) {
-                        $args[] = 'MATCH';
-                        $args[] = $pattern;
-                    }
-
-                    if ($count !== null) {
-                        $args[] = 'COUNT';
-                        $args[] = $count;
-                    }
-
-                    $result = $this->client->scan(...$args);
+                if ($pattern !== null) {
+                    $options['match'] = $pattern;
+                }
+                if ($count !== null) {
+                    $options['count'] = $count;
                 }
             }
 
-            // For Predis, normalize the result
-            if (isset($result) && is_array($result) && count($result) === 2) {
-                return [$result[0], $result[1]]; // [cursor, keys]
+            if ($this->clientType === 'phpredis') {
+                // PhpRedis expects an options array
+                return $this->client->scan($cursor, $options);
+            } else {
+                // For Predis, we need to convert the options array to arguments
+                $args = [$cursor];
+
+                if (isset($options['match'])) {
+                    $args[] = 'MATCH';
+                    $args[] = $options['match'];
+                }
+
+                if (isset($options['count'])) {
+                    $args[] = 'COUNT';
+                    $args[] = $options['count'];
+                }
+
+                $result = $this->client->scan(...$args);
+
+                // For Predis, normalize the result
+                if (is_array($result) && count($result) === 2) {
+                    return [$result[0], $result[1]]; // [cursor, keys]
+                }
             }
 
             return [0, []]; // Fallback for unexpected response

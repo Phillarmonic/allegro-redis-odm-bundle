@@ -295,7 +295,7 @@ class BulkOperations
         $processedCount = 0;
 
         do {
-            [$cursor, $keys] = $this->redisClient->scan($cursor ?? 0, $pattern, $scanCount);
+            [$cursor, $keys] = $this->redisClient->scan($cursor ?? 0, ['match' => $pattern, 'count' => $scanCount]);
 
             foreach ($keys as $key) {
                 $callback($key);
