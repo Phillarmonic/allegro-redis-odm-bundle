@@ -416,7 +416,7 @@ class RedisClientAdapter
                 $keys = $this->client->scan($iterator, $matchPattern, $countValue);
                 // In the first run it should be null
                 // https://stackoverflow.com/questions/49670484/redis-php-redis-scan-and-keys-show-different-results-with-same-pattern
-                return [($iterator === 0) ? null : $iterator, is_array($keys) ? $keys : []];
+                return [$iterator, is_array($keys) ? $keys : []];
             } else {
                 // For Predis
                 $args = [$cursor];
