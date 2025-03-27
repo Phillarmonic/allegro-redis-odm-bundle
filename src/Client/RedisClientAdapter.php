@@ -394,54 +394,53 @@ class RedisClientAdapter
      * Scan the keyspace for matching keys
      *
      * @param int $cursor The cursor returned by the previous call, or 0 for the first call
-     * @param string|array $pattern Pattern to match keys against or options array with 'match' and 'count'
-     * @param int|null $count Number of elements to return per iteration (ignored if $pattern is an array)
+     * @param string|array $pattern Pattern to match keys against or options array
+     * @param int|null $count Number of elements to return per iteration
      * @return array [new cursor, array of keys]
      */
-
     public function scan(int $cursor, $pattern, ?int $count = null): array
     {
         try {
-            // Normalize the arguments to always use an options array internally
-            $options = [];
+            $matchPattern = null;
+            $countValue = null;
 
+            // Extract pattern and count from options array if provided
             if (is_array($pattern)) {
-                $options = $pattern;
+                $matchPattern = $pattern['match'] ?? null;
+                $countValue = $pattern['count'] ?? null;
             } else {
-                if ($pattern !== null) {
-                    $options['match'] = $pattern;
-                }
-                if ($count !== null) {
-                    $options['count'] = $count;
-                }
+                $matchPattern = $pattern;
+                $countValue = $count;
             }
 
             if ($this->clientType === 'phpredis') {
-                // PhpRedis expects an options array
-                return $this->client->scan($cursor, $options);
+                // For phpredis, we need to pass iterator by reference
+                $iterator = $cursor;
+                $keys = $this->client->scan($iterator, $matchPattern, $countValue);
+                return [$iterator, is_array($keys) ? $keys : []];
             } else {
-                // For Predis, we need to convert the options array to arguments
+                // For Predis
                 $args = [$cursor];
 
-                if (isset($options['match'])) {
+                if ($matchPattern !== null) {
                     $args[] = 'MATCH';
-                    $args[] = $options['match'];
+                    $args[] = $matchPattern;
                 }
 
-                if (isset($options['count'])) {
+                if ($countValue !== null) {
                     $args[] = 'COUNT';
-                    $args[] = $options['count'];
+                    $args[] = $countValue;
                 }
 
                 $result = $this->client->scan(...$args);
 
-                // For Predis, normalize the result
+                // Normalize Predis result format
                 if (is_array($result) && count($result) === 2) {
-                    return [$result[0], $result[1]]; // [cursor, keys]
+                    return [(int)$result[0], $result[1]]; // [cursor, keys]
                 }
-            }
 
-            return [0, []]; // Fallback for unexpected response
+                return [0, []]; // Fallback for unexpected response
+            }
         } catch (\Exception $e) {
             error_log('Error in scan: ' . $e->getMessage());
             return [0, []]; // Return empty result on error
