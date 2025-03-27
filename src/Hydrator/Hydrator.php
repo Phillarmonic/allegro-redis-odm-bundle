@@ -82,9 +82,13 @@ class Hydrator
             case 'boolean':
                 return (bool) $value;
             case 'datetime':
+                // Check if value is empty or invalid before creating DateTime
+                if (empty($value) || !is_numeric($value)) {
+                    return null;
+                }
                 return new DateTime('@' . $value);
             case 'json':
-                return json_decode($value, true);
+                return json_decode($value, true, 512, JSON_THROW_ON_ERROR);
             default:
                 return $value;
         }
@@ -111,7 +115,7 @@ class Hydrator
                 }
                 return (int) $value;
             case 'json':
-                return json_encode($value);
+                return json_encode($value, JSON_THROW_ON_ERROR);
             default:
                 return (string) $value;
         }
