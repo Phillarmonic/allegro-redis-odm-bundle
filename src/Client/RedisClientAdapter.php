@@ -401,9 +401,6 @@ class RedisClientAdapter
     public function scan(int $cursor, $pattern, ?int $count = null): array
     {
         try {
-            $matchPattern = null;
-            $countValue = null;
-
             // Extract pattern and count from options array if provided
             if (is_array($pattern)) {
                 $matchPattern = $pattern['match'] ?? null;
@@ -417,7 +414,9 @@ class RedisClientAdapter
                 // For phpredis, we need to pass iterator by reference
                 $iterator = $cursor;
                 $keys = $this->client->scan($iterator, $matchPattern, $countValue);
-                return [$iterator, is_array($keys) ? $keys : []];
+                // In the first run it should be null
+                // https://stackoverflow.com/questions/49670484/redis-php-redis-scan-and-keys-show-different-results-with-same-pattern
+                return [($iterator === 0) ? null : $iterator, is_array($keys) ? $keys : []];
             } else {
                 // For Predis
                 $args = [$cursor];
