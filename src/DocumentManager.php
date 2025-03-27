@@ -16,6 +16,7 @@ class DocumentManager
     private array $unitOfWork = [];
     private array $originalData = []; // Add a new property to store original entity data
     private bool $forceRebuildIndexes = false; // Flag to force index rebuild
+    private array $stats = ['reads' => 0, 'writes' => 0, 'deletes' => 0]; // Statistics tracker
 
     public function __construct(
         private RedisClientAdapter $redisClient,
@@ -24,6 +25,12 @@ class DocumentManager
     ) {
     }
 
+    /**
+     * Get repository for a document class
+     *
+     * @param string $documentClass Fully qualified document class name
+     * @return DocumentRepository
+     */
     public function getRepository(string $documentClass): DocumentRepository
     {
         if (!isset($this->repositories[$documentClass])) {
@@ -57,6 +64,13 @@ class DocumentManager
         $this->forceRebuildIndexes = false;
     }
 
+    /**
+     * Find a document by ID
+     *
+     * @param string $documentClass Fully qualified document class name
+     * @param string $id Document ID
+     * @return object|null The document or null if not found
+     */
     public function find(string $documentClass, string $id)
     {
         $metadata = $this->metadataFactory->getMetadataFor($documentClass);
@@ -83,6 +97,9 @@ class DocumentManager
             $data = json_decode($jsonData, true);
         }
 
+        // Update stats
+        $this->stats['reads']++;
+
         // Hydrate document
         $document = $this->hydrator->hydrate($documentClass, $data);
 
@@ -100,6 +117,12 @@ class DocumentManager
         return $document;
     }
 
+    /**
+     * Persist a document (new or existing)
+     *
+     * @param object $document The document to persist
+     * @throws \RuntimeException If document ID is empty
+     */
     public function persist($document): void
     {
         $className = get_class($document);
@@ -132,6 +155,9 @@ class DocumentManager
 
     /**
      * Check if a document is new (not yet stored in Redis)
+     *
+     * @param object $document The document to check
+     * @return bool True if document is new
      */
     private function isNewDocument($document): bool
     {
@@ -180,8 +206,17 @@ class DocumentManager
                 $this->originalData[$mapKey] = json_decode($jsonData, true);
             }
         }
+
+        // Update stats
+        $this->stats['reads']++;
     }
 
+    /**
+     * Mark a document for removal
+     *
+     * @param object $document The document to remove
+     * @throws \RuntimeException If document ID is empty
+     */
     public function remove($document): void
     {
         $className = get_class($document);
@@ -201,6 +236,9 @@ class DocumentManager
     }
 
     /**
+     * Flush all pending changes to Redis
+     * This writes all persisted documents and removes all deleted documents
+     *
      * @throws \ReflectionException
      */
     public function flush(): void
@@ -223,6 +261,9 @@ class DocumentManager
                 // Remove from identity map and original data
                 unset($this->identityMap[$key]);
                 unset($this->originalData[$key]);
+
+                // Update stats
+                $this->stats['deletes']++;
             } else {
                 // Extract data from document
                 $data = $this->hydrator->extract($document);
@@ -278,6 +319,48 @@ class DocumentManager
                     }
                 }
 
+                // Process sorted indices
+                foreach ($metadata->sortedIndices as $propertyName => $indexName) {
+                    // Get the new value
+                    $reflProperty = new ReflectionProperty($className, $propertyName);
+                    $reflProperty->setAccessible(true);
+                    $newValue = $reflProperty->getValue($document);
+
+                    // Get the old value if there was one
+                    $oldValue = null;
+                    if (isset($this->originalData[$key])) {
+                        $fieldName = $metadata->getFieldName($propertyName);
+                        $oldValue = $this->originalData[$key][$fieldName] ?? null;
+
+                        // Convert to appropriate PHP type if needed
+                        $fieldType = $metadata->getFieldType($propertyName);
+                        if ($fieldType && $oldValue !== null) {
+                            switch ($fieldType) {
+                                case 'integer':
+                                    $oldValue = (int) $oldValue;
+                                    break;
+                                case 'float':
+                                    $oldValue = (float) $oldValue;
+                                    break;
+                            }
+                        }
+                    }
+
+                    // Update the sorted index if the value changed or we're forcing rebuild
+                    if ($this->forceRebuildIndexes || $oldValue !== $newValue) {
+                        // Remove old value from sorted index if it existed
+                        if ($oldValue !== null && !$this->forceRebuildIndexes) {
+                            $sortedIndexKey = $metadata->getSortedIndexKeyName($indexName);
+                            $this->redisClient->zRem($sortedIndexKey, $id);
+                        }
+
+                        // Add new value to sorted index
+                        if ($newValue !== null) {
+                            $this->updateSortedIndex($metadata, $indexName, $newValue, $id);
+                        }
+                    }
+                }
+
                 // Save based on storage type
                 if ($metadata->storageType === 'hash') {
                     $this->redisClient->hMSet($redisKey, $data);
@@ -293,6 +376,9 @@ class DocumentManager
                 // Update identity map and original data
                 $this->identityMap[$key] = $document;
                 $this->originalData[$key] = $data;
+
+                // Update stats
+                $this->stats['writes']++;
             }
         }
 
@@ -306,6 +392,10 @@ class DocumentManager
         $this->forceRebuildIndexes = false;
     }
 
+    /**
+     * Clear the identity map
+     * This removes all loaded documents from memory
+     */
     public function clear(): void
     {
         $this->identityMap = [];
@@ -313,6 +403,11 @@ class DocumentManager
         $this->originalData = [];
     }
 
+    /**
+     * Get the Redis client adapter
+     *
+     * @return RedisClientAdapter
+     */
     public function getRedisClient(): RedisClientAdapter
     {
         return $this->redisClient;
@@ -338,6 +433,32 @@ class DocumentManager
     }
 
     /**
+     * Updates or creates a sorted index entry for a document with optional TTL
+     */
+    private function updateSortedIndex(ClassMetadata $metadata, string $indexName, $value, string $id): void
+    {
+        if ($value === null) {
+            return;
+        }
+
+        // Ensure the value is numeric
+        if (!is_numeric($value)) {
+            throw new \InvalidArgumentException(
+                "Cannot add non-numeric value to sorted index '{$indexName}'. Got: " . gettype($value)
+            );
+        }
+
+        $indexKey = $metadata->getSortedIndexKeyName($indexName);
+        $this->redisClient->zAdd($indexKey, $value, $id);
+
+        // Apply TTL if configured
+        $ttl = $metadata->getSortedIndexTTL($indexName);
+        if ($ttl > 0) {
+            $this->redisClient->expire($indexKey, $ttl);
+        }
+    }
+
+    /**
      * Helper method to clean up all indices for a document
      * @throws \ReflectionException
      */
@@ -348,6 +469,8 @@ class DocumentManager
 
         if ($oldDoc || $originalData) {
             // If we have the old document in identity map or original data, remove specific indices
+
+            // Clean up regular indices
             foreach ($metadata->indices as $propertyName => $indexName) {
                 $oldValue = null;
 
@@ -365,8 +488,16 @@ class DocumentManager
                     $this->redisClient->sRem($indexKey, $id);
                 }
             }
+
+            // Clean up sorted indices
+            foreach ($metadata->sortedIndices as $propertyName => $indexName) {
+                $sortedIndexKey = $metadata->getSortedIndexKeyName($indexName);
+                $this->redisClient->zRem($sortedIndexKey, $id);
+            }
         } else {
             // Otherwise scan for any potential indices (less efficient but complete)
+
+            // Clean up regular indices
             foreach ($metadata->indices as $propertyName => $indexName) {
                 $pattern = $metadata->getIndexKeyPattern($indexName);
                 $keys = $this->redisClient->keys($pattern);
@@ -375,6 +506,151 @@ class DocumentManager
                     $this->redisClient->sRem($indexKey, $id);
                 }
             }
+
+            // Clean up sorted indices
+            foreach ($metadata->sortedIndices as $propertyName => $indexName) {
+                $sortedIndexKey = $metadata->getSortedIndexKeyName($indexName);
+                $this->redisClient->zRem($sortedIndexKey, $id);
+            }
         }
+    }
+
+    /**
+     * Get statistics about operations performed since last reset
+     *
+     * @return array Operation statistics
+     */
+    public function getStats(): array
+    {
+        return $this->stats;
+    }
+
+    /**
+     * Reset statistics counters
+     */
+    public function resetStats(): void
+    {
+        $this->stats = ['reads' => 0, 'writes' => 0, 'deletes' => 0];
+    }
+
+    /**
+     * Find multiple documents by their IDs
+     *
+     * @param string $documentClass
+     * @param array $ids
+     * @return array
+     */
+    public function findByIds(string $documentClass, array $ids): array
+    {
+        $result = [];
+
+        // Use pipelining for better performance
+        $this->redisClient->multi();
+
+        $metadata = $this->metadataFactory->getMetadataFor($documentClass);
+        $pendingLookups = [];
+
+        // First check identity map
+        foreach ($ids as $id) {
+            $mapKey = $documentClass . ':' . $id;
+
+            if (isset($this->identityMap[$mapKey])) {
+                $result[$id] = $this->identityMap[$mapKey];
+            } else {
+                $key = $metadata->getKeyName($id);
+                $pendingLookups[$id] = $key;
+
+                // Queue Redis command based on storage type
+                if ($metadata->storageType === 'hash') {
+                    $this->redisClient->hGetAll($key);
+                } elseif ($metadata->storageType === 'json') {
+                    $this->redisClient->get($key);
+                }
+            }
+        }
+
+        // If we have pending lookups, execute the pipeline
+        if (!empty($pendingLookups)) {
+            $responses = $this->redisClient->exec();
+
+            if (!empty($responses)) {
+                $i = 0;
+                foreach ($pendingLookups as $id => $key) {
+                    $data = $responses[$i++];
+
+                    // Skip if no data found
+                    if (empty($data)) {
+                        continue;
+                    }
+
+                    // If JSON storage, decode the data
+                    if ($metadata->storageType === 'json' && is_string($data)) {
+                        $data = json_decode($data, true);
+                    }
+
+                    // Hydrate the document
+                    $document = $this->hydrator->hydrate($documentClass, $data);
+
+                    // Set ID value
+                    $reflProperty = new ReflectionProperty($documentClass, $metadata->idField);
+                    $reflProperty->setAccessible(true);
+                    $reflProperty->setValue($document, $id);
+
+                    // Add to result
+                    $result[$id] = $document;
+
+                    // Add to identity map
+                    $mapKey = $documentClass . ':' . $id;
+                    $this->identityMap[$mapKey] = $document;
+                    $this->originalData[$mapKey] = $data;
+                }
+
+                // Update stats
+                $this->stats['reads'] += count($pendingLookups);
+            }
+        }
+
+        // Reindex to ensure consistent return format
+        return array_values($result);
+    }
+
+    /**
+     * Get document count by criteria
+     *
+     * @param string $documentClass
+     * @param array $criteria
+     * @return int
+     */
+    public function count(string $documentClass, array $criteria = []): int
+    {
+        $repository = $this->getRepository($documentClass);
+
+        if (empty($criteria)) {
+            return $repository->count();
+        }
+
+        return $repository->findBy($criteria)->getTotalCount();
+    }
+
+    /**
+     * Execute a raw Redis command on the client
+     *
+     * @param string $command The command name
+     * @param mixed ...$args Command arguments
+     * @return mixed Command result
+     */
+    public function executeCommand(string $command, ...$args)
+    {
+        return $this->redisClient->__call($command, $args);
+    }
+
+    /**
+     * Get metadata factory
+     *
+     * @return MetadataFactory
+     */
+    public function getMetadataFactory(): MetadataFactory
+    {
+        return $this->metadataFactory;
     }
 }

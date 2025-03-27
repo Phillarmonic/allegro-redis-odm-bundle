@@ -54,6 +54,32 @@ services:
             - '@allegro_redis_odm.metadata_factory'
         public: false
 
+    # New services for large dataset optimization
+    allegro_redis_odm.batch_processor:
+        class: Phillarmonic\AllegroRedisOdmBundle\Service\BatchProcessor
+        arguments:
+            - '@allegro_redis_odm.document_manager'
+            - '@allegro_redis_odm.metadata_factory'
+            - 100  # Default batch size
+        public: true
+
+    Phillarmonic\AllegroRedisOdmBundle\Service\BatchProcessor:
+        alias: 'allegro_redis_odm.batch_processor'
+        public: true
+
+    allegro_redis_odm.bulk_operations:
+        class: Phillarmonic\AllegroRedisOdmBundle\Service\BulkOperations
+        arguments:
+            - '@allegro_redis_odm.client_adapter'
+            - '@allegro_redis_odm.document_manager'
+            - '@allegro_redis_odm.metadata_factory'
+            - '@allegro_redis_odm.batch_processor'
+        public: true
+
+    Phillarmonic\AllegroRedisOdmBundle\Service\BulkOperations:
+        alias: 'allegro_redis_odm.bulk_operations'
+        public: true
+
     # Import mapping attributes as services
     Phillarmonic\AllegroRedisOdmBundle\Mapping\:
         resource: '../../Mapping/*'

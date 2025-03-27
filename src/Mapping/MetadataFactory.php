@@ -111,6 +111,21 @@ class MetadataFactory
                     $indexName = $indexAttribute->name ?: $fieldName;
                     $metadata->addIndex($property->getName(), $indexName, $indexAttribute->ttl);
                 }
+
+                // Check for sorted index
+                $sortedIndexAttribute = $this->getPropertyAttribute($property, SortedIndex::class);
+                if ($sortedIndexAttribute) {
+                    // Ensure the field type is numeric for sorted indices
+                    if (!in_array($fieldAttribute->type, ['integer', 'float'])) {
+                        throw new \InvalidArgumentException(
+                            "Property '{$property->getName()}' in class '{$className}' has a SortedIndex attribute but is not a numeric type. " .
+                            "SortedIndex can only be used with 'integer' or 'float' field types."
+                        );
+                    }
+
+                    $indexName = $sortedIndexAttribute->name ?: $fieldName;
+                    $metadata->addSortedIndex($property->getName(), $indexName, $sortedIndexAttribute->ttl);
+                }
             }
         }
 
@@ -292,10 +307,32 @@ class MetadataFactory
         }
     }
 
+    /**
+     * Get all configured mappings
+     *
+     * @return array Array of mappings
+     */
     public function getMappings(): array
     {
         // Ensure we have the latest mappings from the parameter bag
         $this->refreshMappings();
         return $this->mappings;
+    }
+
+    /**
+     * Clear metadata cache for a specific class or all classes
+     *
+     * @param string|null $className Optional class name to clear, or null for all classes
+     */
+    public function clearMetadataCache(?string $className = null): void
+    {
+        if ($className !== null) {
+            if (isset($this->metadata[$className])) {
+                unset($this->metadata[$className]);
+            }
+        } else {
+            $this->metadata = [];
+            $this->documentClasses = null;
+        }
     }
 }
