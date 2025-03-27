@@ -473,7 +473,7 @@ class AnalyzePerformanceCommand extends Command
         if (!empty($metadata->sortedIndices)) {
             $io->text("Benchmarking sorted index range queries...");
 
-            // Implement range query benchmark here
+            // TODO: Implement range query benchmark here
             // This would use a RangeQuery object to perform range queries
         }
 
@@ -490,7 +490,7 @@ class AnalyzePerformanceCommand extends Command
                 }, $batchKeys);
 
                 $startTime = microtime(true);
-                $batchDocuments = $repository->findByIds($batchIds);
+                $batchDocuments = $this->documentManager->findByIds($repository->getDocumentClass(), $batchIds);
                 $endTime = microtime(true);
 
                 $totalTime = $endTime - $startTime;
