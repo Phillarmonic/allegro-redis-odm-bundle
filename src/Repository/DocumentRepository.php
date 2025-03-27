@@ -74,7 +74,7 @@ class DocumentRepository
                 'match' => $searchPattern,
                 'count' => $scanCount
             ];
-            [$cursor, $scanKeys] = $redisClient->scan($cursor ?? 0, $options);
+            [$cursor, $scanKeys] = $redisClient->scan($cursor ?? 0, $searchPattern, $scanCount);
 
             if (!empty($scanKeys)) {
                 // OPTIMIZATION: Avoid array_merge in a loop by directly appending keys
