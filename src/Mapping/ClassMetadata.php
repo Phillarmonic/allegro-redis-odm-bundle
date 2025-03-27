@@ -16,6 +16,8 @@ class ClassMetadata
     public array $fields = [];
     public array $indices = [];
     public array $indicesTTL = []; // Store TTL for each index
+    public array $sortedIndices = []; // Missing property for sorted indices
+    public array $sortedIndicesTTL = []; // Store TTL for sorted indices
 
     public function __construct(string $className)
     {
@@ -35,6 +37,13 @@ class ClassMetadata
     {
         $this->indices[$propertyName] = $indexName;
         $this->indicesTTL[$indexName] = $ttl;
+    }
+
+    // Add method for sorted indices
+    public function addSortedIndex(string $propertyName, string $indexName, int $ttl = 0): void
+    {
+        $this->sortedIndices[$propertyName] = $indexName;
+        $this->sortedIndicesTTL[$indexName] = $ttl;
     }
 
     public function getKeyName(string $id): string
@@ -82,6 +91,26 @@ class ClassMetadata
     public function getIndexTTL(string $indexName): int
     {
         return $this->indicesTTL[$indexName] ?? 0;
+    }
+
+    /**
+     * Get the sorted index key name
+     */
+    public function getSortedIndexKeyName(string $indexName): string
+    {
+        if ($this->prefix) {
+            return $this->prefix . ':zidx:' . $this->collection . ':' . $indexName;
+        }
+
+        return 'zidx:' . $this->collection . ':' . $indexName;
+    }
+
+    /**
+     * Get TTL for a specific sorted index
+     */
+    public function getSortedIndexTTL(string $indexName): int
+    {
+        return $this->sortedIndicesTTL[$indexName] ?? 0;
     }
 
     /**
@@ -169,10 +198,26 @@ class ClassMetadata
     }
 
     /**
+     * Get all sorted indices as property name => index name mapping
+     */
+    public function getSortedIndices(): array
+    {
+        return $this->sortedIndices;
+    }
+
+    /**
      * Get all index TTLs as index name => ttl mapping
      */
     public function getIndicesTTL(): array
     {
         return $this->indicesTTL;
+    }
+
+    /**
+     * Get all sorted index TTLs as index name => ttl mapping
+     */
+    public function getSortedIndicesTTL(): array
+    {
+        return $this->sortedIndicesTTL;
     }
 }

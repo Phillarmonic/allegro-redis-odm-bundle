@@ -389,4 +389,61 @@ class RedisClientAdapter
             return null;
         }
     }
+
+    /**
+     * Scan the keyspace for matching keys
+     *
+     * @param int|null $cursor The cursor returned by the previous call, or 0 for the first call
+     * @param string|array $pattern Pattern to match keys against or options array
+     * @param int|null $count Number of elements to return per iteration
+     * @return array [new cursor, array of keys]
+     */
+    public function scan(?int $cursor, $pattern, ?int $count = null): array
+    {
+        try {
+            // Extract pattern and count from options array if provided
+            if (is_array($pattern)) {
+                $matchPattern = $pattern['match'] ?? null;
+                $countValue = $pattern['count'] ?? null;
+            } else {
+                $matchPattern = $pattern;
+                $countValue = $count;
+            }
+
+            if ($this->clientType === 'phpredis') {
+                // For phpredis, we need to pass iterator by reference
+                $iterator = $cursor;
+                $keys = $this->client->scan($iterator, $matchPattern, $countValue);
+                // In the first run it should be null
+                // https://stackoverflow.com/questions/49670484/redis-php-redis-scan-and-keys-show-different-results-with-same-pattern
+                return [$iterator, is_array($keys) ? $keys : []];
+            } else {
+                // For Predis
+                $args = [$cursor];
+
+                if ($matchPattern !== null) {
+                    $args[] = 'MATCH';
+                    $args[] = $matchPattern;
+                }
+
+                if ($countValue !== null) {
+                    $args[] = 'COUNT';
+                    $args[] = $countValue;
+                }
+
+                $result = $this->client->scan(...$args);
+
+                // Normalize Predis result format
+                if (is_array($result) && count($result) === 2) {
+                    return [(int)$result[0], $result[1]]; // [cursor, keys]
+                }
+
+                return [0, []]; // Fallback for unexpected response
+            }
+        } catch (\Exception $e) {
+            error_log('Error in scan: ' . $e->getMessage());
+            return [0, []]; // Return empty result on error
+        }
+    }
+
 }

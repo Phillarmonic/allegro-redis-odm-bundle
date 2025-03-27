@@ -477,6 +477,7 @@ private string $id;
 
 You can set TTL on specific indexes to auto-expire them:
 
+
 ```php
 #[Field]
 #[Index(name: 'featured', ttl: 86400)] // 24-hour TTL on this index
