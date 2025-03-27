@@ -389,4 +389,55 @@ class RedisClientAdapter
             return null;
         }
     }
+    /**
+     * Scan the keyspace for matching keys
+     *
+     * @param int $cursor The cursor returned by the previous call, or 0 for the first call
+     * @param string|null $pattern Pattern to match keys against
+     * @param int|null $count Number of elements to return per iteration (Redis might return more or less)
+     * @return array [new cursor, array of keys]
+     */
+    public function scan(int $cursor, ?string $pattern = null, ?int $count = null): array
+    {
+        try {
+            if ($this->clientType === 'phpredis') {
+                $options = [];
+
+                if ($pattern !== null) {
+                    $options['match'] = $pattern;
+                }
+
+                if ($count !== null) {
+                    $options['count'] = $count;
+                }
+
+                return $this->client->scan($cursor, $options);
+            } else {
+                // For Predis, the scan command has a different signature
+                $args = [$cursor];
+
+                if ($pattern !== null) {
+                    $args[] = 'MATCH';
+                    $args[] = $pattern;
+                }
+
+                if ($count !== null) {
+                    $args[] = 'COUNT';
+                    $args[] = $count;
+                }
+
+                $result = $this->client->scan(...$args);
+
+                // Predis returns an array with cursor as first element and keys as the second
+                if (is_array($result) && count($result) === 2) {
+                    return [$result[0], $result[1]]; // [cursor, keys]
+                }
+
+                return [0, []]; // Fallback for unexpected response
+            }
+        } catch (\Exception $e) {
+            error_log('Error in scan: ' . $e->getMessage());
+            return [0, []]; // Return empty result on error
+        }
+    }
 }

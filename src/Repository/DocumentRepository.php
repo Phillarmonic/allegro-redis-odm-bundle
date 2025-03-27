@@ -69,10 +69,7 @@ class DocumentRepository
         $scanCount = min(($limit ?? 1000), 1000); // Set a reasonable scan count
 
         do {
-            [$cursor, $scanKeys] = $redisClient->scan($cursor ?? 0, [
-                'match' => $searchPattern,
-                'count' => $scanCount
-            ]);
+            [$cursor, $scanKeys] = $redisClient->scan($cursor ?? 0, $searchPattern, $scanCount);
 
             if (!empty($scanKeys)) {
                 $keys = array_merge($keys, $scanKeys);
