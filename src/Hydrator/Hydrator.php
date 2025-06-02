@@ -66,7 +66,7 @@ class Hydrator
         return $data;
     }
 
-    private function convertToPhpValue($value, string $type)
+    public function convertToPhpValue($value, string $type)
     {
         if ($value === null) {
             return null;
