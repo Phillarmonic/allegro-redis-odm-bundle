@@ -40,6 +40,10 @@ class Hydrator
         return $document;
     }
 
+    /**
+     * @throws \ReflectionException
+     * @throws \JsonException
+     */
     public function extract($document): array
     {
         $className = get_class($document);
@@ -60,7 +64,10 @@ class Hydrator
             }
 
             // Convert to Redis value
-            $data[$fieldName] = $this->convertToDatabaseValue($value, $fieldInfo['type']);
+            $data[$fieldName] = $this->convertToDatabaseValue(
+                $value,
+                $fieldInfo['type']
+            );
         }
 
         return $data;
@@ -86,6 +93,10 @@ class Hydrator
                 if (empty($value) || !is_numeric($value)) {
                     return null;
                 }
+                // Prefer Carbon if available for a better DX
+                if (class_exists(\Carbon\Carbon::class)) {
+                    return \Carbon\Carbon::createFromTimestamp($value);
+                }
                 return new DateTime('@' . $value);
             case 'json':
                 return json_decode($value, true, 512, JSON_THROW_ON_ERROR);
@@ -110,7 +121,7 @@ class Hydrator
             case 'boolean':
                 return (int) $value;
             case 'datetime':
-                if ($value instanceof DateTime) {
+                if ($value instanceof \DateTimeInterface) {
                     return $value->getTimestamp();
                 }
                 return (int) $value;

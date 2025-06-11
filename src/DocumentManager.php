@@ -2,14 +2,16 @@
 
 namespace Phillarmonic\AllegroRedisOdmBundle;
 
+use Carbon\CarbonImmutable;
 use Phillarmonic\AllegroRedisOdmBundle\Client\RedisClientAdapter;
+use Phillarmonic\AllegroRedisOdmBundle\Exception\DuplicateDocumentIdException;
+use Phillarmonic\AllegroRedisOdmBundle\Exception\ImmutableIdException;
+use Phillarmonic\AllegroRedisOdmBundle\Exception\UniqueConstraintViolationException;
 use Phillarmonic\AllegroRedisOdmBundle\Hydrator\Hydrator;
 use Phillarmonic\AllegroRedisOdmBundle\Mapping\ClassMetadata;
 use Phillarmonic\AllegroRedisOdmBundle\Mapping\MetadataFactory;
+use Phillarmonic\AllegroRedisOdmBundle\Mapping\TimestampableTrait;
 use Phillarmonic\AllegroRedisOdmBundle\Repository\DocumentRepository;
-use Phillarmonic\AllegroRedisOdmBundle\Exception\UniqueConstraintViolationException;
-use Phillarmonic\AllegroRedisOdmBundle\Exception\DuplicateDocumentIdException;
-use Phillarmonic\AllegroRedisOdmBundle\Exception\ImmutableIdException;
 use ReflectionProperty;
 
 class DocumentManager
@@ -33,8 +35,8 @@ class DocumentManager
     {
         if (!isset($this->repositories[$documentClass])) {
             $metadata = $this->metadataFactory->getMetadataFor($documentClass);
-            $repositoryClass = $metadata->repositoryClass ?:
-                DocumentRepository::class;
+            $repositoryClass =
+                $metadata->repositoryClass ?: DocumentRepository::class;
             $this->repositories[$documentClass] = new $repositoryClass(
                 $this,
                 $documentClass,
@@ -119,7 +121,8 @@ class DocumentManager
 
         $idStr = (string) $currentIdOnObject;
         $mapKey = $mapKeyPrefix . $idStr;
-        $isManaged = isset($this->identityMap[$mapKey]) &&
+        $isManaged =
+            isset($this->identityMap[$mapKey]) &&
             $this->identityMap[$mapKey] === $document; // Check if THIS instance is managed
 
         if (!$isManaged) {
@@ -204,9 +207,7 @@ class DocumentManager
                 $dataFetched = json_decode($jsonData, true);
             }
         }
-        $this->originalData[$mapKey] = !empty($dataFetched) ?
-            $dataFetched :
-            [];
+        $this->originalData[$mapKey] = !empty($dataFetched) ? $dataFetched : [];
 
         if (!empty($this->originalData[$mapKey])) {
             $this->stats['reads']++;
@@ -243,7 +244,8 @@ class DocumentManager
             [$className, $originalIdFromUowKey] = explode(':', $uowKey, 2);
             $metadata = $this->metadataFactory->getMetadataFor($className);
 
-            if ($documentInUow !== null) { // Document is being created or updated
+            if ($documentInUow !== null) {
+                // Document is being created or updated
                 $idFieldRefl = new ReflectionProperty(
                     $className,
                     $metadata->idField
@@ -269,7 +271,8 @@ class DocumentManager
             $currentDocumentIdForOps = $originalIdFromUowKey;
             $originalDocData = $this->originalData[$uowKey] ?? [];
 
-            if ($documentInUow === null) { // Document is being deleted
+            if ($documentInUow === null) {
+                // Document is being deleted
                 foreach ($metadata->fields as $propName => $fieldInfo) {
                     if ($fieldInfo['unique']) {
                         $fieldName = $fieldInfo['name'];
@@ -292,7 +295,8 @@ class DocumentManager
                         }
                     }
                 }
-            } else { // Document is being created or updated
+            } else {
+                // Document is being created or updated
                 foreach ($metadata->fields as $propName => $fieldInfo) {
                     if ($fieldInfo['unique']) {
                         $fieldName = $fieldInfo['name'];
@@ -313,22 +317,24 @@ class DocumentManager
 
                         if ($newValue !== $oldValue) {
                             if ($oldValue !== null) {
-                                $oldUniqueKey = $metadata->getUniqueConstraintKey(
-                                    $fieldName,
-                                    $oldValue,
-                                    $fieldInfo['type']
-                                );
+                                $oldUniqueKey =
+                                    $metadata->getUniqueConstraintKey(
+                                        $fieldName,
+                                        $oldValue,
+                                        $fieldInfo['type']
+                                    );
                                 $this->uniqueConstraintOps[] = [
                                     'op' => 'del',
                                     'key' => $oldUniqueKey,
                                 ];
                             }
                             if ($newValue !== null) {
-                                $newUniqueKey = $metadata->getUniqueConstraintKey(
-                                    $fieldName,
-                                    $newValue,
-                                    $fieldInfo['type']
-                                );
+                                $newUniqueKey =
+                                    $metadata->getUniqueConstraintKey(
+                                        $fieldName,
+                                        $newValue,
+                                        $fieldInfo['type']
+                                    );
                                 $pendingUniqueChecks[] = [
                                     'key' => $newUniqueKey,
                                     'docId' => $currentDocumentIdForOps,
@@ -359,8 +365,9 @@ class DocumentManager
                     sprintf(
                         "Unique constraint violation for field '%s' with value '%s'. Document ID '%s' already holds this value for key '%s'.",
                         $check['field'],
-                        is_scalar($check['value']) ? (string) $check['value'] :
-                            gettype($check['value']),
+                        is_scalar($check['value'])
+                            ? (string) $check['value']
+                            : gettype($check['value']),
                         $existingHolderId,
                         $check['key']
                     )
@@ -385,7 +392,8 @@ class DocumentManager
             $redisDocKey = $metadata->getKeyName($originalIdFromUowKey);
             $originalDocDataForIndexes = $this->originalData[$uowKey] ?? [];
 
-            if ($documentInUow === null) { // Deletion
+            if ($documentInUow === null) {
+                // Deletion
                 $this->redisClient->del($redisDocKey);
                 $this->cleanupDocumentIndices(
                     $className,
@@ -397,7 +405,27 @@ class DocumentManager
                 unset($this->identityMap[$uowKey]);
                 unset($this->originalData[$uowKey]);
                 $this->stats['deletes']++;
-            } else { // Create or Update
+            } else {
+                // Create or Update
+
+                // START: Timestampable Trait Logic
+                $isTimestampable = in_array(
+                    TimestampableTrait::class,
+                    class_uses($documentInUow)
+                );
+
+                if ($isTimestampable) {
+                    $now = new CarbonImmutable();
+                    // Always set updated_at on persist
+                    $documentInUow->setUpdatedAt($now);
+
+                    // Set created_at only if it's a new document
+                    if (empty($originalDocDataForIndexes)) {
+                        $documentInUow->setCreatedAt($now);
+                    }
+                }
+                // END: Timestampable Trait Logic
+
                 $dataToStore = $this->hydrator->extract($documentInUow);
 
                 // Regular Index updates
@@ -409,9 +437,17 @@ class DocumentManager
                     $reflProp->setAccessible(true);
                     $newValueIdx = $reflProp->getValue($documentInUow);
                     $oldValueIdx = null;
-                    if (isset($originalDocDataForIndexes[$metadata->getFieldName($propName)])) {
+                    if (
+                        isset(
+                            $originalDocDataForIndexes[
+                            $metadata->getFieldName($propName)
+                            ]
+                        )
+                    ) {
                         $oldValueIdx = $this->hydrator->convertToPhpValue(
-                            $originalDocDataForIndexes[$metadata->getFieldName($propName)],
+                            $originalDocDataForIndexes[
+                            $metadata->getFieldName($propName)
+                            ],
                             $metadata->getFieldType($propName)
                         );
                     }
@@ -451,9 +487,17 @@ class DocumentManager
                     $reflProp->setAccessible(true);
                     $newValSortedIdx = $reflProp->getValue($documentInUow);
                     $oldValSortedIdx = null;
-                    if (isset($originalDocDataForIndexes[$metadata->getFieldName($propName)])) {
+                    if (
+                        isset(
+                            $originalDocDataForIndexes[
+                            $metadata->getFieldName($propName)
+                            ]
+                        )
+                    ) {
                         $oldValSortedIdx = $this->hydrator->convertToPhpValue(
-                            $originalDocDataForIndexes[$metadata->getFieldName($propName)],
+                            $originalDocDataForIndexes[
+                            $metadata->getFieldName($propName)
+                            ],
                             $metadata->getFieldType($propName)
                         );
                     }
@@ -545,14 +589,18 @@ class DocumentManager
         if ($value === null) {
             return;
         }
-        if (!is_numeric($value)) {
+        if (!is_numeric($value) && !$value instanceof \DateTimeInterface) {
             throw new \InvalidArgumentException(
-                "Cannot add non-numeric value to sorted index '{$indexName}'. Got: " .
+                "Cannot add non-numeric or non-DateTime value to sorted index '{$indexName}'. Got: " .
                 gettype($value)
             );
         }
+        $score =
+            $value instanceof \DateTimeInterface
+                ? $value->getTimestamp()
+                : $value;
         $indexKey = $metadata->getSortedIndexKeyName($indexName);
-        $this->redisClient->zAdd($indexKey, [$id => $value]);
+        $this->redisClient->zAdd($indexKey, [$id => $score]);
         $ttl = $metadata->getSortedIndexTTL($indexName);
         if ($ttl > 0) {
             $this->redisClient->expire($indexKey, $ttl);
@@ -581,7 +629,8 @@ class DocumentManager
             if ($oldValue !== null) {
                 $indexKey = $metadata->getIndexKeyName($indexName, $oldValue);
                 $this->redisClient->sRem($indexKey, $id);
-            } elseif ($isDeletionContext && empty($docData)) { // Fallback for deletions if originalData was missing
+            } elseif ($isDeletionContext && empty($docData)) {
+                // Fallback for deletions if originalData was missing
                 $pattern = $metadata->getIndexKeyPattern($indexName);
                 $cursor = null;
                 do {
