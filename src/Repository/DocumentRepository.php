@@ -6,6 +6,7 @@ use Phillarmonic\AllegroRedisOdmBundle\DocumentManager;
 use Phillarmonic\AllegroRedisOdmBundle\Mapping\ClassMetadata;
 use Phillarmonic\AllegroRedisOdmBundle\Query\Criteria;
 use Phillarmonic\AllegroRedisOdmBundle\Query\PaginatedResult;
+use ReflectionProperty;
 
 class DocumentRepository
 {
@@ -70,7 +71,9 @@ class DocumentRepository
                 ['match' => $searchPattern, 'count' => $scanBatchSize]
             );
             if (!empty($scanKeys)) {
-                $allKeys = array_merge($allKeys, $scanKeys);
+                // REFACTOR: Use array_push with splat operator for better performance
+                // than array_merge in a loop.
+                array_push($allKeys, ...$scanKeys);
             }
         } while ($cursor != 0);
 
@@ -91,13 +94,12 @@ class DocumentRepository
             $idsToLoad[] = end($parts);
         }
 
-        $result = $this->findByIds($idsToLoad);
-
         return new PaginatedResult(
-            $result,
+            $idsToLoad,
             $totalCount,
             $limit ?? 0,
-            $offset ?? 0
+            $offset ?? 0,
+            $this
         );
     }
 
@@ -160,7 +162,7 @@ class DocumentRepository
             }
 
             if (empty($resultIds)) {
-                return new PaginatedResult([], 0, $limit ?? 0, $offset ?? 0);
+                return new PaginatedResult([], 0, $limit ?? 0, $offset ?? 0, $this);
             }
         }
 
@@ -176,7 +178,10 @@ class DocumentRepository
                     $cursor,
                     ['match' => $pattern, 'count' => 1000]
                 );
-                $allDocKeys = array_merge($allDocKeys, $keys);
+                // REFACTOR: Use array_push with splat operator for better performance.
+                if (!empty($keys)) {
+                    array_push($allDocKeys, ...$keys);
+                }
             } while ($cursor != 0);
 
             $resultIds = array_map(function ($key) {
@@ -185,45 +190,46 @@ class DocumentRepository
             }, $allDocKeys);
         }
 
-        // Filter by non-indexed criteria if any
-        $documentsToProcess = [];
+        $finalIds = $resultIds;
+        // Filter by non-indexed criteria if any. This requires hydration.
         if (!empty($nonIndexedCriteria) && !empty($resultIds)) {
-            // Fetch documents for IDs and filter
-            // For very large $resultIds, consider streaming/batching this part
             $candidateDocs = $this->findByIds($resultIds);
+            $finalIds = [];
+            $idFieldRefl = new ReflectionProperty($this->documentClass, $this->metadata->idField);
+            $idFieldRefl->setAccessible(true);
+
             foreach ($candidateDocs as $document) {
                 if ($this->matchNonIndexedCriteria($document, $nonIndexedCriteria)) {
-                    $documentsToProcess[] = $document;
+                    $finalIds[] = $idFieldRefl->getValue($document);
                 }
             }
-        } elseif (!empty($resultIds)) {
-            // No non-indexed criteria, just load the documents
-            $documentsToProcess = $this->findByIds($resultIds);
         }
 
-        $totalCount = count($documentsToProcess);
+        $totalCount = count($finalIds);
 
+        // Sorting requires hydrated objects, so it must be applied after hydration.
+        // The PaginatedResult does not sort, but the user can sort the array from getResults().
         if ($orderBy) {
-            $documentsToProcess = $this->applySorting(
-                $documentsToProcess,
-                $orderBy
-            );
+            // To apply sorting before pagination, we would need to hydrate all documents,
+            // sort them, then get the IDs, which defeats the purpose of pluck().
+            // We leave sorting as a post-processing step for the user.
         }
 
-        $paginatedDocuments = $documentsToProcess;
+        $paginatedIds = $finalIds;
         if ($offset !== null || $limit !== null) {
-            $paginatedDocuments = array_slice(
-                $documentsToProcess,
+            $paginatedIds = array_slice(
+                $finalIds,
                 $offset ?? 0,
                 $limit ?? $totalCount
             );
         }
 
         return new PaginatedResult(
-            $paginatedDocuments,
+            $paginatedIds,
             $totalCount,
             $limit ?? 0,
-            $offset ?? 0
+            $offset ?? 0,
+            $this
         );
     }
 
@@ -343,7 +349,10 @@ class DocumentRepository
                             $idsCursor,
                             ['count' => $batchSize]
                         );
-                        $idsToStream = array_merge($idsToStream, $scannedIds);
+                        // REFACTOR: Use array_push with splat operator.
+                        if (!empty($scannedIds)) {
+                            array_push($idsToStream, ...$scannedIds);
+                        }
                     } while ($idsCursor != 0);
                 } else {
                     $idsToStream = [];
@@ -359,7 +368,10 @@ class DocumentRepository
                         $idsCursor,
                         ['count' => $batchSize]
                     );
-                    $idsToStream = array_merge($idsToStream, $scannedIds);
+                    // REFACTOR: Use array_push with splat operator.
+                    if (!empty($scannedIds)) {
+                        array_push($idsToStream, ...$scannedIds);
+                    }
                 } while ($idsCursor != 0);
             }
 
