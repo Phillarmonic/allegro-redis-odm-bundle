@@ -446,4 +446,22 @@ class RedisClientAdapter
         }
     }
 
+    /**
+     * Get the number of fields in a hash
+     *
+     * @param string $key The hash key
+     * @return int Number of fields, or 0 if key does not exist or is not a hash
+     */
+    public function hLen(string $key): int
+    {
+        try {
+            $result = $this->client->hLen($key);
+            // phpredis returns int. Predis also returns int or 0 if key doesn't exist.
+            return is_int($result) ? $result : 0;
+        } catch (\Exception $e) {
+            error_log('Error in hLen: ' . $e->getMessage());
+            return 0;
+        }
+    }
+
 }

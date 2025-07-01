@@ -25,10 +25,9 @@ services:
     allegro_redis_odm.metadata_factory:
         class: Phillarmonic\AllegroRedisOdmBundle\Mapping\MetadataFactory
         arguments:
-            - '@parameter_bag'  # Pass the entire parameter bag instead of just the mappings
+            - '@parameter_bag'  # Pass the entire parameter bag
         public: true
 
-    # Added MappingDebugger service
     allegro_redis_odm.mapping_debugger:
         class: Phillarmonic\AllegroRedisOdmBundle\Service\MappingDebuggerService
         arguments:
@@ -36,7 +35,6 @@ services:
             - '@service_container'
         public: true
 
-    # Aliasing the service for autowiring
     Phillarmonic\AllegroRedisOdmBundle\Service\MappingDebuggerService:
         alias: 'allegro_redis_odm.mapping_debugger'
         public: true
@@ -54,7 +52,6 @@ services:
             - '@allegro_redis_odm.metadata_factory'
         public: false
 
-    # New services for large dataset optimization
     allegro_redis_odm.batch_processor:
         class: Phillarmonic\AllegroRedisOdmBundle\Service\BatchProcessor
         arguments:
@@ -85,9 +82,13 @@ services:
         resource: '../../Mapping/*'
         exclude: '../../Mapping/{ClassMetadata.php}'
 
+    # Auto-register all commands in the Command directory
     Phillarmonic\AllegroRedisOdmBundle\Command\:
         resource: '../../Command/*'
         tags: [ 'console.command' ]
+
+    # Explicit definitions for commands to ensure correct argument wiring
+    # (though autowiring might handle these, explicit is often clearer)
 
     Phillarmonic\AllegroRedisOdmBundle\Command\DebugMappingsCommand:
         arguments:
@@ -107,4 +108,12 @@ services:
             - '@allegro_redis_odm.document_manager'
             - '@allegro_redis_odm.metadata_factory'
             - '@allegro_redis_odm.mapping_debugger'
+        tags: [ 'console.command' ]
+
+    Phillarmonic\AllegroRedisOdmBundle\Command\AnalyzePerformanceCommand:
+        arguments:
+            - '@allegro_redis_odm.document_manager'
+            - '@allegro_redis_odm.metadata_factory'
+            - '@allegro_redis_odm.mapping_debugger'
+            - '@allegro_redis_odm.bulk_operations'
         tags: [ 'console.command' ]

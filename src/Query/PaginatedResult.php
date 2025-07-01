@@ -2,33 +2,137 @@
 
 namespace Phillarmonic\AllegroRedisOdmBundle\Query;
 
+use Countable;
+use IteratorAggregate;
+use Phillarmonic\AllegroRedisOdmBundle\Repository\DocumentRepository;
+
 /**
- * Represents a paginated result set
+ * Represents a paginated result set.
+ * Now supports lazy hydration and plucking specific fields.
  */
-class PaginatedResult implements \Countable, \IteratorAggregate
+class PaginatedResult implements Countable, IteratorAggregate
 {
+    private ?array $hydratedResults = null;
+
     /**
-     * @param array $results The current page of results
-     * @param int $totalCount Total count of all results (not just current page)
-     * @param int $limit Number of items per page (0 means no limit)
+     * @param array $resultIds The current page of document IDs
+     * @param int $totalCount Total count of all results
+     * @param int $limit Number of items per page
      * @param int $offset Starting position
+     * @param DocumentRepository $repository The repository that created this result
      */
     public function __construct(
-        private array $results,
+        private array $resultIds,
         private int $totalCount,
-        private int $limit = 0,
-        private int $offset = 0
+        private int $limit,
+        private int $offset,
+        private DocumentRepository $repository
     ) {
     }
 
     /**
-     * Get the result items for the current page
+     * Get the result items for the current page.
+     * Hydrates the documents on the first call.
      *
      * @return array
      */
     public function getResults(): array
     {
-        return $this->results;
+        if ($this->hydratedResults === null) {
+            if (empty($this->resultIds)) {
+                $this->hydratedResults = [];
+            } else {
+                $this->hydratedResults = $this->repository->findByIds(
+                    $this->resultIds
+                );
+            }
+        }
+        return $this->hydratedResults;
+    }
+
+    /**
+     * Fetch only specific fields for the documents in the result set.
+     * This is a memory-efficient operation that bypasses full object hydration.
+     *
+     * @param array $fields An array of property names to fetch.
+     * @return array An array of associative arrays, each containing the plucked data.
+     */
+    public function pluck(array $fields): array
+    {
+        if (empty($this->resultIds)) {
+            return [];
+        }
+
+        $metadata = $this->repository->getMetadata();
+        $documentManager = $this->repository->getDocumentManager();
+        $redisClient = $documentManager->getRedisClient();
+
+        // Ensure the ID field is always available for context
+        $idProperty = $metadata->idField;
+        if (!in_array($idProperty, $fields)) {
+            $fields[] = $idProperty;
+        }
+
+        $pluckedData = [];
+
+        if ($metadata->storageType === 'hash') {
+            // Highly efficient for hash storage using HMGET
+            $redisFields = [];
+            foreach ($fields as $property) {
+                if ($property === $idProperty) continue;
+                $fieldName = $metadata->getFieldName($property);
+                if ($fieldName) {
+                    $redisFields[$property] = $fieldName;
+                }
+            }
+
+            $redisClient->multi();
+            foreach ($this->resultIds as $id) {
+                $key = $metadata->getKeyName($id);
+                $redisClient->hMGet($key, array_values($redisFields));
+            }
+            $responses = $redisClient->exec();
+
+            foreach ($this->resultIds as $index => $id) {
+                $rowData = [$idProperty => $id];
+                $redisValues = $responses[$index] ?? [];
+                $i = 0;
+                foreach ($redisFields as $prop => $redisField) {
+                    // hMGet returns false for a non-existent field in the hash
+                    $rowData[$prop] = $redisValues[$i] !== false ? $redisValues[$i] : null;
+                    $i++;
+                }
+                $pluckedData[] = $rowData;
+            }
+        } elseif ($metadata->storageType === 'json') {
+            // Less efficient for JSON, but still saves PHP memory by avoiding hydration
+            $redisClient->multi();
+            foreach ($this->resultIds as $id) {
+                $key = $metadata->getKeyName($id);
+                $redisClient->get($key);
+            }
+            $responses = $redisClient->exec();
+
+            foreach ($this->resultIds as $index => $id) {
+                $rowData = [$idProperty => $id];
+                $jsonString = $responses[$index] ?? null;
+                if ($jsonString) {
+                    $decodedData = json_decode($jsonString, true);
+                    foreach ($fields as $property) {
+                        if ($property === $idProperty) continue;
+                        $fieldName = $metadata->getFieldName($property);
+                        if ($fieldName && isset($decodedData[$fieldName])) {
+                            $rowData[$property] = $decodedData[$fieldName];
+                        } else {
+                            $rowData[$property] = null;
+                        }
+                    }
+                }
+                $pluckedData[] = $rowData;
+            }
+        }
+
+        return $pluckedData;
     }
 
     /**
@@ -71,7 +175,6 @@ class PaginatedResult implements \Countable, \IteratorAggregate
         if ($this->limit <= 0) {
             return 1;
         }
-
         return floor($this->offset / $this->limit) + 1;
     }
 
@@ -85,7 +188,6 @@ class PaginatedResult implements \Countable, \IteratorAggregate
         if ($this->limit <= 0) {
             return 1;
         }
-
         return (int) ceil($this->totalCount / $this->limit);
     }
 
@@ -99,7 +201,6 @@ class PaginatedResult implements \Countable, \IteratorAggregate
         if ($this->limit <= 0) {
             return false;
         }
-
         return ($this->offset + $this->limit) < $this->totalCount;
     }
 
@@ -123,7 +224,6 @@ class PaginatedResult implements \Countable, \IteratorAggregate
         if (!$this->hasNextPage()) {
             return null;
         }
-
         return $this->offset + $this->limit;
     }
 
@@ -137,7 +237,6 @@ class PaginatedResult implements \Countable, \IteratorAggregate
         if (!$this->hasPreviousPage()) {
             return null;
         }
-
         return max(0, $this->offset - $this->limit);
     }
 
@@ -148,7 +247,7 @@ class PaginatedResult implements \Countable, \IteratorAggregate
      */
     public function isEmpty(): bool
     {
-        return empty($this->results);
+        return empty($this->resultIds);
     }
 
     /**
@@ -158,7 +257,7 @@ class PaginatedResult implements \Countable, \IteratorAggregate
      */
     public function getFirst()
     {
-        return $this->results[0] ?? null;
+        return $this->getResults()[0] ?? null;
     }
 
     /**
@@ -168,7 +267,7 @@ class PaginatedResult implements \Countable, \IteratorAggregate
      */
     public function count(): int
     {
-        return count($this->results);
+        return count($this->resultIds);
     }
 
     /**
@@ -178,7 +277,7 @@ class PaginatedResult implements \Countable, \IteratorAggregate
      */
     public function getIterator(): \Traversable
     {
-        return new \ArrayIterator($this->results);
+        return new \ArrayIterator($this->getResults());
     }
 
     /**
@@ -189,7 +288,7 @@ class PaginatedResult implements \Countable, \IteratorAggregate
     public function toArray(): array
     {
         return [
-            'results' => $this->results,
+            'results' => $this->getResults(),
             'pagination' => [
                 'total_count' => $this->totalCount,
                 'offset' => $this->offset,
@@ -198,7 +297,7 @@ class PaginatedResult implements \Countable, \IteratorAggregate
                 'total_pages' => $this->getTotalPages(),
                 'has_next_page' => $this->hasNextPage(),
                 'has_previous_page' => $this->hasPreviousPage(),
-            ]
+            ],
         ];
     }
 }

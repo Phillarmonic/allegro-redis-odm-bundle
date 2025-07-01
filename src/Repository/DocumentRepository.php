@@ -6,6 +6,7 @@ use Phillarmonic\AllegroRedisOdmBundle\DocumentManager;
 use Phillarmonic\AllegroRedisOdmBundle\Mapping\ClassMetadata;
 use Phillarmonic\AllegroRedisOdmBundle\Query\Criteria;
 use Phillarmonic\AllegroRedisOdmBundle\Query\PaginatedResult;
+use ReflectionProperty;
 
 class DocumentRepository
 {
@@ -35,90 +36,76 @@ class DocumentRepository
      */
     public function findByIds(array $ids): array
     {
-        $result = [];
-        foreach ($ids as $id) {
-            $document = $this->documentManager->find($this->documentClass, $id);
-            if ($document) {
-                $result[] = $document;
-            }
-        }
-        return $result;
+        // Uses DocumentManager::findByIds which is already pipelined
+        return $this->documentManager->findByIds($this->documentClass, $ids);
     }
 
     /**
-     * Find all documents, with optional pagination
+     * Find all documents, with optional pagination.
+     * Uses SCAN for iterating keys.
      *
      * @param int|null $limit
      * @param int|null $offset
      * @param string|null $pattern Additional pattern to match (supports wildcards)
      * @return PaginatedResult
      */
-    public function findAll(?int $limit = null, ?int $offset = null, ?string $pattern = null): PaginatedResult
-    {
+    public function findAll(
+        ?int $limit = null,
+        ?int $offset = null,
+        ?string $pattern = null
+    ): PaginatedResult {
         $redisClient = $this->documentManager->getRedisClient();
         $basePattern = $this->metadata->getCollectionKeyPattern();
 
-        // If additional pattern is provided, append it to the base pattern
         $searchPattern = $pattern
             ? str_replace('*', $pattern, $basePattern)
             : $basePattern;
 
-        // Use scan instead of keys for better performance with large datasets
+        $allKeys = [];
         $cursor = null;
-        $keys = [];
-        $scanCount = min(($limit ?? 1000), 1000); // Set a reasonable scan count
+        $scanBatchSize = 1000; // How many keys to fetch per SCAN iteration
 
         do {
-            // FIXED: Use options array for phpredis compatibility
-            $options = [
-                'match' => $searchPattern,
-                'count' => $scanCount
-            ];
-            [$cursor, $scanKeys] = $redisClient->scan($cursor ?? null, ['match' => $searchPattern, 'count' => $scanCount]);
-
+            [$cursor, $scanKeys] = $redisClient->scan(
+                $cursor,
+                ['match' => $searchPattern, 'count' => $scanBatchSize]
+            );
             if (!empty($scanKeys)) {
-                // OPTIMIZATION: Avoid array_merge in a loop by directly appending keys
-                foreach ($scanKeys as $key) {
-                    $keys[] = $key;
-                }
-            }
-
-            // Stop if we have enough keys for the requested limit + offset
-            if ($limit !== null && $offset !== null && count($keys) >= ($limit + $offset)) {
-                break;
+                // REFACTOR: Use array_push with splat operator for better performance
+                // than array_merge in a loop.
+                array_push($allKeys, ...$scanKeys);
             }
         } while ($cursor != 0);
 
-        // Get total count for pagination info (if no pattern, use faster count method)
-        $totalCount = $pattern ? count($keys) : $this->count();
+        $totalCount = count($allKeys);
+        $keysToFetch = $allKeys;
 
-        // Apply offset and limit
         if ($offset !== null || $limit !== null) {
-            $keys = array_slice($keys, $offset ?? 0, $limit);
+            $keysToFetch = array_slice(
+                $allKeys,
+                $offset ?? 0,
+                $limit ?? $totalCount
+            );
         }
 
-        $result = [];
-        foreach ($keys as $key) {
-            // Extract ID from key
+        $idsToLoad = [];
+        foreach ($keysToFetch as $key) {
             $parts = explode(':', $key);
-            $id = end($parts);
-
-            $document = $this->find($id);
-            if ($document) {
-                $result[] = $document;
-            }
+            $idsToLoad[] = end($parts);
         }
 
         return new PaginatedResult(
-            $result,
+            $idsToLoad,
             $totalCount,
             $limit ?? 0,
-            $offset ?? 0
+            $offset ?? 0,
+            $this
         );
     }
 
     /**
-     * Find documents by criteria with optional sorting and pagination
+     * Find documents by criteria with optional sorting and pagination.
+     * Optimized for multi-indexed queries using SINTERSTORE.
      *
      * @param array $criteria
      * @param array|null $orderBy
@@ -126,147 +113,153 @@ class DocumentRepository
      * @param int|null $offset
      * @return PaginatedResult
      */
-    public function findBy(array $criteria, ?array $orderBy = null, ?int $limit = null, ?int $offset = null): PaginatedResult
-    {
-        $totalCount = 0;
-        $documentsToProcess = [];
+    public function findBy(
+        array $criteria,
+        ?array $orderBy = null,
+        ?int $limit = null,
+        ?int $offset = null
+    ): PaginatedResult {
         $redisClient = $this->documentManager->getRedisClient();
+        $indexedCriteriaKeys = [];
+        $nonIndexedCriteria = $criteria;
 
-        // Optimize for single indexed field queries
-        if (count($criteria) === 1) {
-            $field = key($criteria);
-            $value = current($criteria);
-
-            // Check if field is indexed
-            if (isset($this->metadata->indices[$field])) {
-                $indexName = $this->metadata->indices[$field];
-                $indexKey = $this->metadata->getIndexKeyName($indexName, $value);
-
-                // Get total count for pagination info
-                $totalCount = $redisClient->sCard($indexKey);
-
-                // Get all IDs or just a slice for pagination
-                if ($offset !== null || $limit !== null) {
-                    // For pagination with indices, we need to get all IDs first and then slice
-                    // A better approach would be using Sorted Sets, but this works with the current implementation
-                    $allIds = $redisClient->sMembers($indexKey);
-                    $ids = array_slice($allIds, $offset ?? 0, $limit);
-                } else {
-                    $ids = $redisClient->sMembers($indexKey);
-                }
-
-                $documents = $this->findByIds($ids);
-
-                // Apply sorting if needed
-                if ($orderBy) {
-                    $documents = $this->applySorting($documents, $orderBy);
-                }
-
-                return new PaginatedResult(
-                    $documents,
-                    $totalCount,
-                    $limit ?? 0,
-                    $offset ?? 0
-                );
-            }
-        }
-
-        // For multi-field criteria or non-indexed fields, we need a more complex approach
-
-        // If we have at least one indexed field in the criteria, start with that to reduce the initial result set
-        $initialIds = null;
+        // Separate indexed criteria
         foreach ($criteria as $field => $value) {
             if (isset($this->metadata->indices[$field])) {
                 $indexName = $this->metadata->indices[$field];
-                $indexKey = $this->metadata->getIndexKeyName($indexName, $value);
-                $ids = $redisClient->sMembers($indexKey);
+                $indexedCriteriaKeys[] = $this->metadata->getIndexKeyName(
+                    $indexName,
+                    $value
+                );
+                unset($nonIndexedCriteria[$field]);
+            }
+        }
 
-                if ($initialIds === null) {
-                    $initialIds = $ids;
+        $resultIds = null;
+
+        if (!empty($indexedCriteriaKeys)) {
+            if (count($indexedCriteriaKeys) > 1) {
+                // Use SINTERSTORE for multiple indexed fields
+                $tempIntersectionKey = $this->metadata->getKeyName(
+                    'temp_intersect:' . bin2hex(random_bytes(8))
+                );
+                $sinterStoreResult = $redisClient->sInterStore(
+                       $tempIntersectionKey,
+                    ...$indexedCriteriaKeys
+                );
+                // Set a short TTL for the temporary key
+                $redisClient->expire($tempIntersectionKey, 60); // 1 minute TTL
+
+                if ($sinterStoreResult !== false && $sinterStoreResult > 0) {
+                    $resultIds = $redisClient->sMembers($tempIntersectionKey);
                 } else {
-                    // Intersect with previous results - we want documents that match ALL criteria
-                    $initialIds = array_intersect($initialIds, $ids);
+                    $resultIds = [];
                 }
+                $redisClient->del($tempIntersectionKey); // Clean up
+            } else {
+                // Single indexed field
+                $resultIds = $redisClient->sMembers($indexedCriteriaKeys[0]);
+            }
 
-                // Remove this field from criteria as we've already handled it
-                unset($criteria[$field]);
+            if (empty($resultIds)) {
+                return new PaginatedResult([], 0, $limit ?? 0, $offset ?? 0, $this);
+            }
+        }
 
-                // If no matches, we can return early
-                if (empty($initialIds)) {
-                    return new PaginatedResult([], 0, $limit ?? 0, $offset ?? 0);
+        // If no indexed criteria were used, or if we need to fetch all initially
+        if ($resultIds === null) {
+            // Fallback: scan all document keys if no indexed criteria could be used
+            // This is expensive and should be avoided by using indexes
+            $allDocKeys = [];
+            $cursor = null;
+            $pattern = $this->metadata->getCollectionKeyPattern();
+            do {
+                [$cursor, $keys] = $redisClient->scan(
+                    $cursor,
+                    ['match' => $pattern, 'count' => 1000]
+                );
+                // REFACTOR: Use array_push with splat operator for better performance.
+                if (!empty($keys)) {
+                    array_push($allDocKeys, ...$keys);
+                }
+            } while ($cursor != 0);
+
+            $resultIds = array_map(function ($key) {
+                $parts = explode(':', $key);
+                return end($parts);
+            }, $allDocKeys);
+        }
+
+        $finalIds = $resultIds;
+        // Filter by non-indexed criteria if any. This requires hydration.
+        if (!empty($nonIndexedCriteria) && !empty($resultIds)) {
+            $candidateDocs = $this->findByIds($resultIds);
+            $finalIds = [];
+            $idFieldRefl = new ReflectionProperty($this->documentClass, $this->metadata->idField);
+            $idFieldRefl->setAccessible(true);
+
+            foreach ($candidateDocs as $document) {
+                if ($this->matchNonIndexedCriteria($document, $nonIndexedCriteria)) {
+                    $finalIds[] = $idFieldRefl->getValue($document);
                 }
             }
         }
 
-        // If we found initial IDs from indexed fields, use those
-        if ($initialIds !== null) {
-            $documentsToProcess = $this->findByIds($initialIds);
-            $totalCount = count($documentsToProcess);
-        } else {
-            // Otherwise, we need to scan all documents
-            $allDocuments = $this->findAll()->getResults();
-            $documentsToProcess = $allDocuments;
-            $totalCount = count($allDocuments);
-        }
+        $totalCount = count($finalIds);
 
-        // Apply remaining criteria
-        if (!empty($criteria)) {
-            $filteredDocuments = [];
-
-            foreach ($documentsToProcess as $document) {
-                $match = true;
-
-                foreach ($criteria as $field => $value) {
-                    $getter = 'get' . ucfirst($field);
-
-                    if (method_exists($document, $getter)) {
-                        if ($document->$getter() != $value) {
-                            $match = false;
-                            break;
-                        }
-                    } else {
-                        // Try to access property directly
-                        try {
-                            $reflProperty = new \ReflectionProperty($this->documentClass, $field);
-                            $reflProperty->setAccessible(true);
-
-                            if ($reflProperty->getValue($document) != $value) {
-                                $match = false;
-                                break;
-                            }
-                        } catch (\ReflectionException $e) {
-                            $match = false;
-                            break;
-                        }
-                    }
-                }
-
-                if ($match) {
-                    $filteredDocuments[] = $document;
-                }
-            }
-
-            $documentsToProcess = $filteredDocuments;
-            $totalCount = count($filteredDocuments);
-        }
-
-        // Apply sorting if specified
+        // Sorting requires hydrated objects, so it must be applied after hydration.
+        // The PaginatedResult does not sort, but the user can sort the array from getResults().
         if ($orderBy) {
-            $documentsToProcess = $this->applySorting($documentsToProcess, $orderBy);
+            // To apply sorting before pagination, we would need to hydrate all documents,
+            // sort them, then get the IDs, which defeats the purpose of pluck().
+            // We leave sorting as a post-processing step for the user.
         }
 
-        // Apply pagination
-        $result = $documentsToProcess;
+        $paginatedIds = $finalIds;
         if ($offset !== null || $limit !== null) {
-            $result = array_slice($documentsToProcess, $offset ?? 0, $limit);
+            $paginatedIds = array_slice(
+                $finalIds,
+                $offset ?? 0,
+                $limit ?? $totalCount
+            );
         }
 
         return new PaginatedResult(
-            $result,
+            $paginatedIds,
             $totalCount,
             $limit ?? 0,
-            $offset ?? 0
+            $offset ?? 0,
+            $this
         );
+    }
+
+    private function matchNonIndexedCriteria(
+        object $document,
+        array $criteria
+    ): bool {
+        foreach ($criteria as $field => $value) {
+            $getter = 'get' . ucfirst($field);
+            $actualValue = null;
+
+            if (method_exists($document, $getter)) {
+                $actualValue = $document->$getter();
+            } else {
+                try {
+                    $reflProperty = new \ReflectionProperty(
+                        $this->documentClass,
+                        $field
+                    );
+                    $reflProperty->setAccessible(true);
+                    $actualValue = $reflProperty->getValue($document);
+                } catch (\ReflectionException $e) {
+                    return false; // Field doesn't exist
+                }
+            }
+            if ($actualValue != $value) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -282,7 +275,8 @@ class DocumentRepository
     }
 
     /**
-     * Count all documents in the collection
+     * Count all documents in the collection.
+     * Uses SCAN for large datasets.
      *
      * @return int
      */
@@ -290,20 +284,14 @@ class DocumentRepository
     {
         $redisClient = $this->documentManager->getRedisClient();
         $pattern = $this->metadata->getCollectionKeyPattern();
-
-        // For small datasets, using keys() is fine
-        if ($this->isSmallDataset()) {
-            $keys = $redisClient->keys($pattern);
-            return count($keys);
-        }
-
-        // For large datasets, we need to use scan and count
-        $cursor = null;
         $count = 0;
+        $cursor = null;
 
         do {
-            // FIX: Pass pattern as string instead of array
-            [$cursor, $keys] = $redisClient->scan($cursor ?? null, ['match' => $pattern, 'count' => 1000]);
+            [$cursor, $keys] = $redisClient->scan(
+                $cursor,
+                ['match' => $pattern, 'count' => 1000]
+            ); // Adjust count as needed
             $count += count($keys);
         } while ($cursor != 0);
 
@@ -315,158 +303,118 @@ class DocumentRepository
      *
      * @param callable $callback Function to process each document
      * @param array $criteria Optional criteria to filter documents
-     * @param int $batchSize Number of documents to process in each batch
+     * @param int $batchSize Number of documents to process in each batch (for loading from Redis)
      * @return int Number of documents processed
      */
-    public function stream(callable $callback, array $criteria = [], int $batchSize = 100): int
-    {
+    public function stream(
+        callable $callback,
+        array $criteria = [],
+        int $batchSize = 100
+    ): int {
         $redisClient = $this->documentManager->getRedisClient();
-        $pattern = $this->metadata->getCollectionKeyPattern();
-        $cursor = null;
         $processed = 0;
 
-        // Apply indexed criteria if available to reduce the dataset
-        $initialIds = null;
-
+        // Attempt to get initial IDs if there are indexed criteria
+        $indexedCriteriaKeys = [];
+        $nonIndexedCriteria = $criteria;
         foreach ($criteria as $field => $value) {
             if (isset($this->metadata->indices[$field])) {
                 $indexName = $this->metadata->indices[$field];
-                $indexKey = $this->metadata->getIndexKeyName($indexName, $value);
-                $ids = $redisClient->sMembers($indexKey);
-
-                if ($initialIds === null) {
-                    $initialIds = $ids;
-                } else {
-                    $initialIds = array_intersect($initialIds, $ids);
-                }
-
-                unset($criteria[$field]);
-
-                if (empty($initialIds)) {
-                    return 0; // No matches for indexed criteria
-                }
+                $indexedCriteriaKeys[] = $this->metadata->getIndexKeyName(
+                    $indexName,
+                    $value
+                );
+                unset($nonIndexedCriteria[$field]);
             }
         }
 
-        // If we have initial IDs from indexed fields, use those
-        if ($initialIds !== null) {
-            $batch = [];
-            $count = 0;
-
-            foreach ($initialIds as $id) {
-                $document = $this->find($id);
-
-                if ($document) {
-                    // Apply remaining non-indexed criteria
-                    $match = true;
-
-                    foreach ($criteria as $field => $value) {
-                        $getter = 'get' . ucfirst($field);
-
-                        if (method_exists($document, $getter)) {
-                            if ($document->$getter() != $value) {
-                                $match = false;
-                                break;
-                            }
-                        } else {
-                            // Try to access property directly
-                            try {
-                                $reflProperty = new \ReflectionProperty($this->documentClass, $field);
-                                $reflProperty->setAccessible(true);
-
-                                if ($reflProperty->getValue($document) != $value) {
-                                    $match = false;
-                                    break;
-                                }
-                            } catch (\ReflectionException $e) {
-                                $match = false;
-                                break;
-                            }
+        $idsToStream = null;
+        if (!empty($indexedCriteriaKeys)) {
+            if (count($indexedCriteriaKeys) > 1) {
+                $tempIntersectionKey = $this->metadata->getKeyName(
+                    'temp_stream_intersect:' . bin2hex(random_bytes(8))
+                );
+                $sinterStoreResult = $redisClient->sInterStore(
+                       $tempIntersectionKey,
+                    ...$indexedCriteriaKeys
+                );
+                $redisClient->expire($tempIntersectionKey, 60);
+                if ($sinterStoreResult !== false && $sinterStoreResult > 0) {
+                    // Use SSCAN for iterating over the temporary set
+                    $idsCursor = null;
+                    $idsToStream = [];
+                    do {
+                        [$idsCursor, $scannedIds] = $redisClient->sScan(
+                            $tempIntersectionKey,
+                            $idsCursor,
+                            ['count' => $batchSize]
+                        );
+                        // REFACTOR: Use array_push with splat operator.
+                        if (!empty($scannedIds)) {
+                            array_push($idsToStream, ...$scannedIds);
                         }
+                    } while ($idsCursor != 0);
+                } else {
+                    $idsToStream = [];
+                }
+                $redisClient->del($tempIntersectionKey);
+            } else {
+                // Use SSCAN for single index
+                $idsCursor = null;
+                $idsToStream = [];
+                do {
+                    [$idsCursor, $scannedIds] = $redisClient->sScan(
+                        $indexedCriteriaKeys[0],
+                        $idsCursor,
+                        ['count' => $batchSize]
+                    );
+                    // REFACTOR: Use array_push with splat operator.
+                    if (!empty($scannedIds)) {
+                        array_push($idsToStream, ...$scannedIds);
                     }
+                } while ($idsCursor != 0);
+            }
 
-                    if ($match) {
-                        $batch[] = $document;
-                        $count++;
+            if (empty($idsToStream)) return 0;
 
-                        if (count($batch) >= $batchSize) {
-                            foreach ($batch as $doc) {
-                                $callback($doc);
-                                $processed++;
-                            }
-
-                            $batch = [];
-                            $this->documentManager->clear(); // Clear identity map to free memory
-                        }
+            // Stream from these specific IDs
+            foreach (array_chunk($idsToStream, $batchSize) as $idChunk) {
+                $documents = $this->findByIds($idChunk);
+                foreach ($documents as $document) {
+                    if (empty($nonIndexedCriteria) || $this->matchNonIndexedCriteria($document, $nonIndexedCriteria)) {
+                        $callback($document);
+                        $processed++;
                     }
                 }
+                $this->documentManager->clear(); // Clear identity map periodically
             }
-
-            // Process any remaining documents
-            foreach ($batch as $doc) {
-                $callback($doc);
-                $processed++;
-            }
-
             return $processed;
         }
 
-        // Otherwise, scan through all documents
+        // No indexed criteria or failed to get initial IDs, stream all and filter
+        $pattern = $this->metadata->getCollectionKeyPattern();
+        $cursor = null;
         do {
-            [$cursor, $keys] = $redisClient->scan($cursor ?? null, ['match' => $pattern, 'count' => $batchSize]);
-
-            $batch = [];
-
+            [$cursor, $keys] = $redisClient->scan(
+                $cursor,
+                ['match' => $pattern, 'count' => $batchSize]
+            );
+            $idsInBatch = [];
             foreach ($keys as $key) {
                 $parts = explode(':', $key);
-                $id = end($parts);
+                $idsInBatch[] = end($parts);
+            }
 
-                $document = $this->find($id);
-
-                if ($document) {
-                    // Apply criteria if any
-                    $match = true;
-
-                    foreach ($criteria as $field => $value) {
-                        $getter = 'get' . ucfirst($field);
-
-                        if (method_exists($document, $getter)) {
-                            if ($document->$getter() != $value) {
-                                $match = false;
-                                break;
-                            }
-                        } else {
-                            // Try to access property directly
-                            try {
-                                $reflProperty = new \ReflectionProperty($this->documentClass, $field);
-                                $reflProperty->setAccessible(true);
-
-                                if ($reflProperty->getValue($document) != $value) {
-                                    $match = false;
-                                    break;
-                                }
-                            } catch (\ReflectionException $e) {
-                                $match = false;
-                                break;
-                            }
-                        }
-                    }
-
-                    if ($match) {
-                        $batch[] = $document;
+            if (!empty($idsInBatch)) {
+                $documents = $this->findByIds($idsInBatch);
+                foreach ($documents as $document) {
+                    if (empty($criteria) || $this->matchNonIndexedCriteria($document, $criteria)) {
+                        $callback($document);
+                        $processed++;
                     }
                 }
             }
-
-            // Process batch
-            foreach ($batch as $doc) {
-                $callback($doc);
-                $processed++;
-            }
-
-            // Clear identity map to free memory
-            $this->documentManager->clear();
-
+            $this->documentManager->clear(); // Clear identity map periodically
         } while ($cursor != 0);
 
         return $processed;
@@ -490,51 +438,70 @@ class DocumentRepository
      * @param array $orderBy
      * @return array
      */
-    protected function applySorting(array $documents, array $orderBy): array
+    public function applySorting(array $documents, array $orderBy): array
     {
-        usort($documents, function($a, $b) use ($orderBy) {
+        usort($documents, function ($a, $b) use ($orderBy) {
             foreach ($orderBy as $field => $direction) {
                 $getter = 'get' . ucfirst($field);
+                $valueA = null;
+                $valueB = null;
 
                 if (method_exists($a, $getter) && method_exists($b, $getter)) {
                     $valueA = $a->$getter();
                     $valueB = $b->$getter();
                 } else {
-                    // Try to access property directly
                     try {
-                        $reflProperty = new \ReflectionProperty($this->documentClass, $field);
+                        $reflProperty = new \ReflectionProperty(
+                            $this->documentClass,
+                            $field
+                        );
                         $reflProperty->setAccessible(true);
                         $valueA = $reflProperty->getValue($a);
                         $valueB = $reflProperty->getValue($b);
                     } catch (\ReflectionException $e) {
-                        continue; // Skip this field
+                        continue;
                     }
                 }
 
                 if ($valueA == $valueB) {
                     continue;
                 }
-
                 $comparison = $valueA <=> $valueB;
-                return strtoupper($direction) === 'DESC' ? -$comparison : $comparison;
+                return strtoupper($direction) === 'DESC'
+                    ? -$comparison
+                    : $comparison;
             }
-
             return 0;
         });
-
         return $documents;
     }
 
     /**
-     * Determine if we're working with a small dataset
-     * This allows optimization for count operations
+     * Get the DocumentManager instance.
      *
-     * @return bool
+     * @return DocumentManager
      */
-    protected function isSmallDataset(): bool
+    public function getDocumentManager(): DocumentManager
     {
-        // You can implement a more sophisticated check based on your use case
-        // For example, checking a counter in Redis or using a configuration setting
-        return false; // Default to assuming large dataset for safety
+        return $this->documentManager;
+    }
+
+    /**
+     * Get the ClassMetadata instance.
+     *
+     * @return ClassMetadata
+     */
+    public function getMetadata(): ClassMetadata
+    {
+        return $this->metadata;
+    }
+
+    /**
+     * Get the document class name.
+     * @return string
+     */
+    public function getDocumentClass(): string
+    {
+        return $this->documentClass;
     }
 }

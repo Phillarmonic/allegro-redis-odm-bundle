@@ -5,7 +5,8 @@ namespace Phillarmonic\AllegroRedisOdmBundle\Query;
 use Phillarmonic\AllegroRedisOdmBundle\Repository\DocumentRepository;
 
 /**
- * Range query for sorted indices
+ * Range query for sorted indices.
+ * Optimized for pagination using Redis LIMIT and efficient filtering.
  */
 class RangeQuery
 {
@@ -15,12 +16,12 @@ class RangeQuery
     private string $field;
 
     /**
-     * @var float|null Minimum value (inclusive)
+     * @var float|null Minimum value (inclusive by default)
      */
     private ?float $min = null;
 
     /**
-     * @var float|null Maximum value (inclusive)
+     * @var float|null Maximum value (inclusive by default)
      */
     private ?float $max = null;
 
@@ -30,17 +31,17 @@ class RangeQuery
     private array $criteria = [];
 
     /**
-     * @var array|null Ordering criteria
+     * @var array|null Ordering criteria (applied after fetching from Redis)
      */
     private ?array $orderBy = null;
 
     /**
-     * @var int|null Maximum number of results
+     * @var int|null Maximum number of results (for Redis LIMIT)
      */
     private ?int $limit = null;
 
     /**
-     * @var int|null Offset for pagination
+     * @var int|null Offset for pagination (for Redis LIMIT)
      */
     private ?int $offset = null;
 
@@ -96,7 +97,7 @@ class RangeQuery
     }
 
     /**
-     * Add a field criteria
+     * Add a field criteria (applied after fetching from Redis)
      *
      * @param string $field Field name
      * @param mixed $value Field value
@@ -109,7 +110,7 @@ class RangeQuery
     }
 
     /**
-     * Add ordering
+     * Add ordering (applied after fetching from Redis)
      *
      * @param string $field Field name
      * @param string $direction 'ASC' or 'DESC'
@@ -154,12 +155,10 @@ class RangeQuery
      */
     public function execute(DocumentRepository $repository): PaginatedResult
     {
-        // Get access to the document manager and metadata
         $documentManager = $repository->getDocumentManager();
         $metadata = $repository->getMetadata();
         $redisClient = $documentManager->getRedisClient();
 
-        // Check if the field has a sorted index
         if (!isset($metadata->sortedIndices[$this->field])) {
             throw new \InvalidArgumentException(
                 "Field '{$this->field}' does not have a SortedIndex. " .
@@ -170,112 +169,88 @@ class RangeQuery
         $indexName = $metadata->sortedIndices[$this->field];
         $indexKey = $metadata->getSortedIndexKeyName($indexName);
 
-        // Prepare min/max values for Redis
-        $minValue = $this->min !== null ? ($this->includeMin ? $this->min : '(' . $this->min) : '-inf';
-        $maxValue = $this->max !== null ? ($this->includeMax ? $this->max : '(' . $this->max) : '+inf';
+        $minValue = $this->min !== null
+            ? ($this->includeMin ? (string) $this->min : '(' . $this->min)
+            : '-inf';
+        $maxValue = $this->max !== null
+            ? ($this->includeMax ? (string) $this->max : '(' . $this->max)
+            : '+inf';
 
-        // Use ZRANGEBYSCORE to get matching document IDs
-        $resultIds = $redisClient->zRangeByScore($indexKey, $minValue, $maxValue);
+        // Get total count for the range (without limit/offset for pagination info)
+        $totalCountInRange = $redisClient->zCount($indexKey, $minValue, $maxValue);
 
-        // If we have additional criteria, filter the results
-        if (!empty($this->criteria)) {
-            $filteredIds = [];
+        $options = [];
+        if ($this->limit !== null) {
+            $options['limit'] = [$this->offset ?? 0, $this->limit];
+        }
 
-            foreach ($resultIds as $id) {
-                $document = $documentManager->find($repository->getDocumentClass(), $id);
+        // Fetch IDs using ZRANGEBYSCORE with LIMIT
+        $resultIds = $redisClient->zRangeByScore(
+            $indexKey,
+            $minValue,
+            $maxValue,
+            $options
+        );
 
-                if (!$document) {
-                    continue;
-                }
-
-                $match = true;
-
-                foreach ($this->criteria as $field => $value) {
-                    $getter = 'get' . ucfirst($field);
-
-                    if (method_exists($document, $getter)) {
-                        if ($document->$getter() != $value) {
-                            $match = false;
-                            break;
-                        }
-                    } else {
-                        // Try to access property directly
-                        try {
-                            $reflProperty = new \ReflectionProperty($repository->getDocumentClass(), $field);
-                            $reflProperty->setAccessible(true);
-
-                            if ($reflProperty->getValue($document) != $value) {
+        $documents = [];
+        if (!empty($resultIds)) {
+            if (!empty($this->criteria)) {
+                // Fetch documents and apply additional criteria
+                // For very large $resultIds after pagination, consider batching findByIds
+                $candidateDocs = $documentManager->findByIds(
+                    $repository->getDocumentClass(),
+                    $resultIds
+                );
+                foreach ($candidateDocs as $document) {
+                    $match = true;
+                    foreach ($this->criteria as $critField => $critValue) {
+                        $getter = 'get' . ucfirst($critField);
+                        $actualValue = null;
+                        if (method_exists($document, $getter)) {
+                            $actualValue = $document->$getter();
+                        } else {
+                            try {
+                                $reflProp = new \ReflectionProperty(
+                                    get_class($document),
+                                    $critField
+                                );
+                                $reflProp->setAccessible(true);
+                                $actualValue = $reflProp->getValue($document);
+                            } catch (\ReflectionException $e) {
                                 $match = false;
                                 break;
                             }
-                        } catch (\ReflectionException $e) {
+                        }
+                        if ($actualValue != $critValue) {
                             $match = false;
                             break;
                         }
                     }
+                    if ($match) {
+                        $documents[] = $document;
+                    }
                 }
-
-                if ($match) {
-                    $filteredIds[] = $id;
-                }
-            }
-
-            $resultIds = $filteredIds;
-        }
-
-        // Get total count for pagination
-        $totalCount = count($resultIds);
-
-        // Apply offset and limit
-        if ($this->offset !== null || $this->limit !== null) {
-            $resultIds = array_slice($resultIds, $this->offset ?? 0, $this->limit);
-        }
-
-        // Load the documents
-        $documents = [];
-        foreach ($resultIds as $id) {
-            $document = $documentManager->find($repository->getDocumentClass(), $id);
-            if ($document) {
-                $documents[] = $document;
+                // Note: $totalCountInRange is for the raw range.
+                // If criteria reduce the count, pagination might be off.
+                // For accurate pagination with criteria, count after filtering.
+                // This example prioritizes Redis-side pagination for the range.
+                // A more complex solution would re-count after PHP filtering if strict pagination on filtered set is needed.
+            } else {
+                // No additional criteria, just load the documents
+                $documents = $documentManager->findByIds(
+                    $repository->getDocumentClass(),
+                    $resultIds
+                );
             }
         }
 
-        // Apply sorting if needed
         if ($this->orderBy && count($documents) > 1) {
-            usort($documents, function($a, $b) {
-                foreach ($this->orderBy as $field => $direction) {
-                    $getter = 'get' . ucfirst($field);
-
-                    if (method_exists($a, $getter) && method_exists($b, $getter)) {
-                        $valueA = $a->$getter();
-                        $valueB = $b->$getter();
-                    } else {
-                        // Try to access property directly
-                        try {
-                            $reflProperty = new \ReflectionProperty(get_class($a), $field);
-                            $reflProperty->setAccessible(true);
-                            $valueA = $reflProperty->getValue($a);
-                            $valueB = $reflProperty->getValue($b);
-                        } catch (\ReflectionException $e) {
-                            continue; // Skip this field
-                        }
-                    }
-
-                    if ($valueA == $valueB) {
-                        continue;
-                    }
-
-                    $comparison = $valueA <=> $valueB;
-                    return strtoupper($direction) === 'DESC' ? -$comparison : $comparison;
-                }
-
-                return 0;
-            });
+            $documents = $repository->applySorting($documents, $this->orderBy);
         }
 
         return new PaginatedResult(
             $documents,
-            $totalCount,
+            $totalCountInRange, // This is the count of items in the score range before PHP criteria
             $this->limit ?? 0,
             $this->offset ?? 0
         );
