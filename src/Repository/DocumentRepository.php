@@ -519,32 +519,54 @@ class DocumentRepository
      */
     public function whereIn(string $field, array $values, ?int $limit = null, ?int $offset = null): PaginatedResult
     {
-        if (!isset($this->metadata->indices[$field])) {
-            throw new \InvalidArgumentException("Field '{$field}' is not an indexed field.");
-        }
-
         if (empty($values)) {
             return new PaginatedResult([], 0, $limit ?? 0, $offset ?? 0, $this);
         }
 
         $redisClient = $this->documentManager->getRedisClient();
-        $indexName = $this->metadata->indices[$field];
-        $indexKeys = [];
-        foreach ($values as $value) {
-            $indexKeys[] = $this->metadata->getIndexKeyName($indexName, $value);
-        }
 
-        $resultIds = [];
-        if (count($indexKeys) > 1) {
-            // Use SUNION to get all IDs from the various index sets
-            $resultIds = $redisClient->sUnion(...$indexKeys);
+        // If the field is indexed, use the efficient SUNION method
+        if (isset($this->metadata->indices[$field])) {
+            $indexName = $this->metadata->indices[$field];
+            $indexKeys = [];
+            foreach ($values as $value) {
+                $indexKeys[] = $this->metadata->getIndexKeyName($indexName, $value);
+            }
+
+            $resultIds = (count($indexKeys) > 1)
+                ? $redisClient->sUnion(...$indexKeys)
+                : $redisClient->sMembers($indexKeys[0]);
+
+            if (empty($resultIds)) {
+                return new PaginatedResult([], 0, $limit ?? 0, $offset ?? 0, $this);
+            }
         } else {
-            // If only one value, just get members of that set
-            $resultIds = $redisClient->sMembers($indexKeys[0]);
-        }
+            // Fallback for non-indexed fields: scan all documents
+            $allDocKeys = [];
+            $cursor = null;
+            $pattern = $this->metadata->getCollectionKeyPattern();
+            do {
+                [$cursor, $keys] = $redisClient->scan($cursor, ['match' => $pattern, 'count' => 1000]);
+                if (!empty($keys)) {
+                    array_push($allDocKeys, ...$keys);
+                }
+            } while ($cursor != 0);
 
-        if (empty($resultIds)) {
-            return new PaginatedResult([], 0, $limit ?? 0, $offset ?? 0, $this);
+            $allIds = array_map(function ($key) {
+                $parts = explode(':', $key);
+                return end($parts);
+            }, $allDocKeys);
+
+            $candidateDocs = $this->findByIds($allIds);
+            $resultIds = [];
+            $idFieldRefl = new ReflectionProperty($this->documentClass, $this->metadata->idField);
+            $idFieldRefl->setAccessible(true);
+
+            foreach ($candidateDocs as $document) {
+                if ($this->matchNonIndexedCriteria($document, [$field => $values])) {
+                    $resultIds[] = $idFieldRefl->getValue($document);
+                }
+            }
         }
 
         $totalCount = count($resultIds);
