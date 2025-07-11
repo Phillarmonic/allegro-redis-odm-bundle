@@ -4,25 +4,25 @@ A Symfony bundle providing an Object Document Mapper (ODM) for Redis. This bundl
 
 ## Features
 
--   **Simple object persistence** - Store PHP objects directly in Redis.
--   **Multiple storage formats** - Store documents as Redis Hashes or JSON.
--   **Automatic indexing** - Create and maintain secondary indices (Redis Sets) for fast lookups.
--   **Sorted Indices & Range Queries** - Efficiently query numeric or string ranges using Redis Sorted Sets (via `#[SortedIndex]` and `RangeQuery` builder).
--   **Repository pattern** - Clean data access through document repositories.
--   **Attribute-based mapping** - Define document structure using PHP 8 attributes.
--   **TTL support** - Set expiration times for documents and indices.
--   **Multiple client support** - Works with both PhpRedis and Predis clients.
--   **Optimized for Large Datasets** - Utilizes Redis `SCAN` for key iteration and server-side operations (like `SINTERSTORE`) where appropriate to minimize memory overhead and improve performance.
--   **Batch Processing Utilities** - Provides `BatchProcessor` and `BulkOperations` services for efficient handling of large data volumes.
--   **Performance Analysis Tools** - Includes `allegro:analyze-performance` command to inspect collection statistics, memory usage, and benchmark common operations.
--   **Symfony integration** - Seamlessly integrates with the Symfony framework.
+- **Simple object persistence** - Store PHP objects directly in Redis.
+- **Multiple storage formats** - Store documents as Redis Hashes or JSON.
+- **Automatic indexing** - Create and maintain secondary indices (Redis Sets) for fast lookups.
+- **Sorted Indices & Range Queries** - Efficiently query numeric or string ranges using Redis Sorted Sets (via `#[SortedIndex]` and `RangeQuery` builder).
+- **Repository pattern** - Clean data access through document repositories.
+- **Attribute-based mapping** - Define document structure using PHP 8 attributes.
+- **TTL support** - Set expiration times for documents and indices.
+- **Multiple client support** - Works with both PhpRedis and Predis clients.
+- **Optimized for Large Datasets** - Utilizes Redis `SCAN` for key iteration and server-side operations (like `SINTERSTORE`) where appropriate to minimize memory overhead and improve performance.
+- **Batch Processing Utilities** - Provides `BatchProcessor` and `BulkOperations` services for efficient handling of large data volumes.
+- **Performance Analysis Tools** - Includes `allegro:analyze-performance` command to inspect collection statistics, memory usage, and benchmark common operations.
+- **Symfony integration** - Seamlessly integrates with the Symfony framework.
 
 ## Requirements
 
--   PHP 8.2 or higher
--   Symfony 6.0+ or 7.0+
--   Redis server
--   Either the PHP Redis extension (`ext-redis`) or `predis/predis` package
+- PHP 8.2 or higher
+- Symfony 6.0+ or 7.0+
+- Redis server
+- Either the PHP Redis extension (`ext-redis`) or `predis/predis` package
 
 ## Installation
 
@@ -194,27 +194,27 @@ class ArticleService
 
 ### Mapping Attributes
 
-| Attribute         | Target   | Description                                                                 |
-| ----------------- | -------- | --------------------------------------------------------------------------- |
-| `#[Document]`     | Class    | Marks a class as a Redis document. Defines collection name and optional key prefix. |
-| `#[RedisHash]`    | Class    | Stores document as a Redis hash (default if no storage type specified).     |
-| `#[RedisJson]`    | Class    | Stores document as JSON in Redis (requires RedisJSON module).               |
-| `#[Expiration]`   | Class    | Sets a default TTL (Time-To-Live) for all documents of this class.          |
-| `#[Id]`           | Property | Marks a property as the document ID. Strategy can be `auto`, `manual`, or `none`. |
-| `#[Field]`        | Property | Maps a property to a Redis field. Defines name, type, and nullability.      |
-| `#[Index]`        | Property | Creates a secondary index (Redis SET) for a field, enabling fast lookups by value. Can have a `ttl`. |
-| `#[SortedIndex]`  | Property | Creates a sorted index (Redis ZSET) for numeric or string fields, enabling efficient range queries. Can have a `ttl`. |
+| Attribute        | Target   | Description                                                                                                           |
+| ---------------- | -------- | --------------------------------------------------------------------------------------------------------------------- |
+| `#[Document]`    | Class    | Marks a class as a Redis document. Defines collection name and optional key prefix.                                   |
+| `#[RedisHash]`   | Class    | Stores document as a Redis hash (default if no storage type specified).                                               |
+| `#[RedisJson]`   | Class    | Stores document as JSON in Redis (requires RedisJSON module).                                                         |
+| `#[Expiration]`  | Class    | Sets a default TTL (Time-To-Live) for all documents of this class.                                                    |
+| `#[Id]`          | Property | Marks a property as the document ID. Strategy can be `auto`, `manual`, or `none`.                                     |
+| `#[Field]`       | Property | Maps a property to a Redis field. Defines name, type, and nullability.                                                |
+| `#[Index]`       | Property | Creates a secondary index (Redis SET) for a field, enabling fast lookups by value. Can have a `ttl`.                  |
+| `#[SortedIndex]` | Property | Creates a sorted index (Redis ZSET) for numeric or string fields, enabling efficient range queries. Can have a `ttl`. |
 
 ### Field Types
 
 The `#[Field]` attribute supports the following types for data conversion:
 
--   `string` (default)
--   `integer`
--   `float`
--   `boolean`
--   `datetime` (stored as UNIX timestamp)
--   `json` (PHP array serialized as JSON string, useful for embedding simple structures)
+- `string` (default)
+- `integer`
+- `float`
+- `boolean`
+- `datetime` (stored as UNIX timestamp)
+- `json` (PHP array serialized as JSON string, useful for embedding simple structures)
 
 ### Command Line Tools
 
@@ -233,6 +233,7 @@ php bin/console allegro:purge-indexes
 # Analyze performance characteristics of your document collections
 php bin/console allegro:analyze-performance
 ```
+
 Use the `--help` flag with any command for more options (e.g., `php bin/console allegro:rebuild-indexes --help`).
 
 ### Working with Repositories
@@ -372,6 +373,71 @@ class Article
 }
 ```
 
+
+
+### Handling Paginated Results and Iteration
+
+All finder methods that can return multiple documents (like findAll(), findBy(), and whereIn()) return a PaginatedResult object. This object contains the results for the current page and metadata for pagination.You can iterate over this object directly with foreach to get the hydrated documents for the current page.**Example: Iterating a single page of results**
+
+```php
+$repository = $this->documentManager->getRepository(Article::class);
+
+// Get the first page of 10 published articles
+$paginatedResult = $repository->findBy(
+    ['isPublished' => true],
+    ['publishedAt' => 'DESC'],
+    10, // limit
+    0   // offset
+);
+
+// The PaginatedResult object is directly iterable
+foreach ($paginatedResult as $article) {
+    // $article is a hydrated Article object
+    echo $article->getTitle() . "\n";
+}
+
+// You can also access pagination metadata
+echo "Page: " . $paginatedResult->getCurrentPage() . "\n";
+echo "Total Articles: " . $paginatedResult->getTotalCount() . "\n";
+echo "Total Pages: " . $paginatedResult->getTotalPages() . "\n";
+```
+
+**Example: Iterating through ALL pages of a large result set**For processing a large number of documents, you should not load them all at once. Instead, loop through the pages. This is the most memory-efficient approach.
+
+```php
+$repository = $this->documentManager->getRepository(Article::class);
+$itemsPerPage = 100;
+$offset = 0;
+$keepFetching = true;
+
+do {
+    $paginatedResult = $repository->findBy(
+        ['category' => 'technology'],
+        null,
+        $itemsPerPage,
+        $offset
+    );
+
+    if ($paginatedResult->isEmpty()) {
+        $keepFetching = false;
+    } else {
+        foreach ($paginatedResult as $article) {
+            // Process each article
+            $this->doSomethingWith($article);
+        }
+
+        if ($paginatedResult->hasNextPage()) {
+            // Prepare for the next iteration
+            $offset = $paginatedResult->getNextPageOffset();
+        } else {
+            $keepFetching = false;
+        }
+    }
+} while ($keepFetching);
+```
+
+ 
+
 ## Configuration Reference
 
 ### Full Configuration
@@ -428,27 +494,28 @@ $documentManager->flush(); // article1 and article2 are saved in one transaction
 
 For handling very large datasets efficiently:
 
--   **BatchProcessor Service:**
-    Inject `Phillarmonic\AllegroRedisOdmBundle\Service\BatchProcessor`. Use it to process large arrays of items or query results in manageable batches, helping to control memory usage during data imports, exports, or mass updates.
-    ```php
-    // Example: Importing data
-    $itemsToImport = [/* ... large array of data ... */];
-    $this->batchProcessor->processItems(
-        $itemsToImport,
-        function($itemData) {
-            $article = Article::fromArray($itemData); // Assuming Article has a suitable factory
-            // No need to call persist here, BatchProcessor handles it
-            return $article;
-        },
-        100 // Batch size
-    );
-    ```
+- **BatchProcessor Service:**
+  Inject `Phillarmonic\AllegroRedisOdmBundle\Service\BatchProcessor`. Use it to process large arrays of items or query results in manageable batches, helping to control memory usage during data imports, exports, or mass updates.
+  
+  ```php
+  // Example: Importing data
+  $itemsToImport = [/* ... large array of data ... */];
+  $this->batchProcessor->processItems(
+      $itemsToImport,
+      function($itemData) {
+          $article = Article::fromArray($itemData); // Assuming Article has a suitable factory
+          // No need to call persist here, BatchProcessor handles it
+          return $article;
+      },
+      100 // Batch size
+  );
+  ```
 
--   **BulkOperations Service:**
-    Inject `Phillarmonic\AllegroRedisOdmBundle\Service\BulkOperations`. This service provides optimized methods like `bulkDelete()`, `bulkUpdate()`, `renameCollection()`, and `getCollectionStats()`. These are designed for efficiency with large datasets, often utilizing Redis `SCAN` and batching techniques internally.
+- **BulkOperations Service:**
+  Inject `Phillarmonic\AllegroRedisOdmBundle\Service\BulkOperations`. This service provides optimized methods like `bulkDelete()`, `bulkUpdate()`, `renameCollection()`, and `getCollectionStats()`. These are designed for efficiency with large datasets, often utilizing Redis `SCAN` and batching techniques internally.
 
--   **Streaming Results:**
-    The `DocumentRepository::stream()` method allows you to process all documents matching criteria one by one (or in small internal batches) using a callback, which is highly memory-efficient for large collections.
+- **Streaming Results:**
+  The `DocumentRepository::stream()` method allows you to process all documents matching criteria one by one (or in small internal batches) using a callback, which is highly memory-efficient for large collections.
 
 ### Sorted Indexes and Range Queries
 
@@ -493,6 +560,7 @@ $queryByDate = RangeQuery::create('publishedAt')
                        ->setFirstResult(0);
 $recentArticles = $queryByDate->execute($repository)->getResults();
 ```
+
 The `RangeQuery` builder translates these to efficient Redis sorted set commands.
 
 ### Using With TLS/SSL
@@ -514,6 +582,7 @@ allegro_redis_odm:
         #     verify_peer_name: true
         #     cafile: '/path/to/your/ca.pem'
 ```
+
 The bundle attempts to configure basic TLS options for `phpredis` when `scheme: rediss` is used. For more advanced SSL configurations with `predis`, use the `connection.options.ssl` array.
 
 ### Working with Redis JSON
@@ -571,17 +640,18 @@ private bool $isFeatured;
 #[SortedIndex(name: 'trending_score', ttl: 3600)] // Sorted index entries expire after 1 hour
 private int $trendingScore;
 ```
+
 The TTL is applied to the Redis key representing the index value (for `Index`) or the sorted set key itself (for `SortedIndex`).
 
 ## Best Practices
 
-1.  **Index Wisely:** Only create `#[Index]` or `#[SortedIndex]` on fields you frequently search or sort/range query by. Too many indexes can slow down writes and consume more memory.
-2.  **Appropriate TTLs:** Use `#[Expiration]` on documents and `ttl` on indexes for data that can naturally expire. This helps manage Redis memory.
-3.  **Batch Operations:** Utilize `DocumentManager::flush()` for multiple persists/removes, and the `BatchProcessor` or `BulkOperations` services for very large scale data manipulation.
-4.  **Document Size:** While Redis can handle large values, aim for reasonably sized documents. If a part of your document is very large, frequently updated independently, or rarely accessed with the main document, consider if it should be a separate, linked document.
-5.  **Understand SCAN vs KEYS:** This bundle uses Redis `SCAN` internally for operations like `findAll()` and `count()` to avoid blocking your Redis server with large key spaces. If writing custom low-level Redis interactions, prefer `RedisClientAdapter::scan()` over `keys()`.
-6.  **Schema Evolution:** Adding new nullable fields is generally safe. For more complex changes (renaming, type changes), plan data migrations. The bundle itself doesn't provide automated migration tools; these would typically be custom scripts (e.g., Symfony commands).
-7.  **Use Debug Commands:** `allegro:debug-mappings` is invaluable for diagnosing issues with your document definitions and configuration. `allegro:analyze-performance` can provide insights into your data characteristics.
+1. **Index Wisely:** Only create `#[Index]` or `#[SortedIndex]` on fields you frequently search or sort/range query by. Too many indexes can slow down writes and consume more memory.
+2. **Appropriate TTLs:** Use `#[Expiration]` on documents and `ttl` on indexes for data that can naturally expire. This helps manage Redis memory.
+3. **Batch Operations:** Utilize `DocumentManager::flush()` for multiple persists/removes, and the `BatchProcessor` or `BulkOperations` services for very large scale data manipulation.
+4. **Document Size:** While Redis can handle large values, aim for reasonably sized documents. If a part of your document is very large, frequently updated independently, or rarely accessed with the main document, consider if it should be a separate, linked document.
+5. **Understand SCAN vs KEYS:** This bundle uses Redis `SCAN` internally for operations like `findAll()` and `count()` to avoid blocking your Redis server with large key spaces. If writing custom low-level Redis interactions, prefer `RedisClientAdapter::scan()` over `keys()`.
+6. **Schema Evolution:** Adding new nullable fields is generally safe. For more complex changes (renaming, type changes), plan data migrations. The bundle itself doesn't provide automated migration tools; these would typically be custom scripts (e.g., Symfony commands).
+7. **Use Debug Commands:** `allegro:debug-mappings` is invaluable for diagnosing issues with your document definitions and configuration. `allegro:analyze-performance` can provide insights into your data characteristics.
 
 ## License
 
