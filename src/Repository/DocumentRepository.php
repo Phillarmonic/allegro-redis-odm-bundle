@@ -6,6 +6,7 @@ use Phillarmonic\AllegroRedisOdmBundle\DocumentManager;
 use Phillarmonic\AllegroRedisOdmBundle\Mapping\ClassMetadata;
 use Phillarmonic\AllegroRedisOdmBundle\Query\Criteria;
 use Phillarmonic\AllegroRedisOdmBundle\Query\PaginatedResult;
+use Random\RandomException;
 use ReflectionProperty;
 
 class DocumentRepository
@@ -503,5 +504,65 @@ class DocumentRepository
     public function getDocumentClass(): string
     {
         return $this->documentClass;
+    }
+
+    /**
+     * Finds documents where a given field matches any of the values in a given array.
+     * This method is efficient for indexed fields as it uses SUNION to combine results.
+     *
+     * @param string $field The field to match by. Must be an indexed field.
+     * @param array $values An array of values to match against the field.
+     * @param int|null $limit
+     * @param int|null $offset
+     * @return PaginatedResult
+     */
+    public function whereIn(string $field, array $values, ?int $limit = null, ?int $offset = null): PaginatedResult
+    {
+        if (!isset($this->metadata->indices[$field])) {
+            throw new \InvalidArgumentException("Field '{$field}' is not an indexed field.");
+        }
+
+        if (empty($values)) {
+            return new PaginatedResult([], 0, $limit ?? 0, $offset ?? 0, $this);
+        }
+
+        $redisClient = $this->documentManager->getRedisClient();
+        $indexName = $this->metadata->indices[$field];
+        $indexKeys = [];
+        foreach ($values as $value) {
+            $indexKeys[] = $this->metadata->getIndexKeyName($indexName, $value);
+        }
+
+        $resultIds = [];
+        if (count($indexKeys) > 1) {
+            // Use SUNION to get all IDs from the various index sets
+            $resultIds = $redisClient->sUnion(...$indexKeys);
+        } else {
+            // If only one value, just get members of that set
+            $resultIds = $redisClient->sMembers($indexKeys[0]);
+        }
+
+        if (empty($resultIds)) {
+            return new PaginatedResult([], 0, $limit ?? 0, $offset ?? 0, $this);
+        }
+
+        $totalCount = count($resultIds);
+        $paginatedIds = $resultIds;
+
+        if ($offset !== null || $limit !== null) {
+            $paginatedIds = array_slice(
+                $resultIds,
+                $offset ?? 0,
+                $limit ?? $totalCount
+            );
+        }
+
+        return new PaginatedResult(
+            $paginatedIds,
+            $totalCount,
+            $limit ?? 0,
+            $offset ?? 0,
+            $this
+        );
     }
 }

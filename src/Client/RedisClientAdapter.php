@@ -456,7 +456,7 @@ class RedisClientAdapter
     {
         try {
             $result = $this->client->hLen($key);
-            // phpredis returns int. Predis also returns int or 0 if key doesn't exist.
+            // phpredis returns int. Predis also returns int or 0 if key does not exist.
             return is_int($result) ? $result : 0;
         } catch (\Exception $e) {
             error_log('Error in hLen: ' . $e->getMessage());
@@ -464,4 +464,24 @@ class RedisClientAdapter
         }
     }
 
+    /**
+     * Get the union of multiple sets.
+     *
+     * @param string ...$keys The keys of the sets to union.
+     * @return array An array of members of the resulting set.
+     */
+    public function sUnion(string ...$keys): array
+    {
+        try {
+            if ($this->clientType === 'phpredis') {
+                $result = $this->client->sUnion(...$keys);
+            } else {
+                $result = $this->client->sunion(...$keys);
+            }
+            return is_array($result) ? $result : [];
+        } catch (\Exception $e) {
+            error_log('Error in sUnion: ' . $e->getMessage());
+            return [];
+        }
+    }
 }
