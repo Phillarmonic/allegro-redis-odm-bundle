@@ -13,6 +13,7 @@ use Phillarmonic\AllegroRedisOdmBundle\Repository\DocumentRepository;
 class PaginatedResult implements Countable, IteratorAggregate
 {
     private ?array $hydratedResults = null;
+    private array $indexedResults = [];
 
     /**
      * @param array $resultIds The current page of document IDs
@@ -48,6 +49,74 @@ class PaginatedResult implements Countable, IteratorAggregate
             }
         }
         return $this->hydratedResults;
+    }
+
+    /**
+     * Re-indexes the result array by a specific property of the documents.
+     *
+     * Note: If the chosen property is not unique among the results,
+     * documents with the same key will overwrite previous ones.
+     *
+     * @param string $property The name of the property to use as the array key.
+     * @return array The re-indexed associative array of documents.
+     * @throws \InvalidArgumentException If a document's property value is not a valid array key (e.g., null or an object without __toString).
+     * @throws \ReflectionException
+     */
+    public function indexResultBy(string $property): array
+    {
+        if (isset($this->indexedResults[$property])) {
+            return $this->indexedResults[$property];
+        }
+
+        $results = $this->getResults();
+        if (empty($results)) {
+            return [];
+        }
+
+        $indexedArray = [];
+        foreach ($results as $document) {
+            $key = null;
+            $getter = 'get' . ucfirst($property);
+            $isser = 'is' . ucfirst($property);
+
+            if (method_exists($document, $getter)) {
+                $key = $document->$getter();
+            } elseif (method_exists($document, $isser)) {
+                $key = $document->$isser();
+            } else {
+                // Fallback to reflection for private/protected properties without getters
+                $reflClass = new \ReflectionClass($document);
+                if ($reflClass->hasProperty($property)) {
+                    $reflProperty = $reflClass->getProperty($property);
+                    $reflProperty->setAccessible(true);
+                    $key = $reflProperty->getValue($document);
+                }
+            }
+
+            if (is_object($key)) {
+                if (method_exists($key, '__toString')) {
+                    $key = (string) $key;
+                } else {
+                    throw new \InvalidArgumentException(
+                        sprintf(
+                            'Cannot use object of class "%s" as array key because it does not implement __toString().',
+                            get_class($key)
+                        )
+                    );
+                }
+            }
+
+            if ($key === null) {
+                throw new \InvalidArgumentException(
+                    'Cannot use null as an array key for indexing.'
+                );
+            }
+
+            $indexedArray[$key] = $document;
+        }
+
+        $this->indexedResults[$property] = $indexedArray;
+        return $indexedArray;
     }
 
     /**
