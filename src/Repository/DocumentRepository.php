@@ -515,7 +515,6 @@ class DocumentRepository
      * @param int|null $limit
      * @param int|null $offset
      * @return PaginatedResult
-     * @throws RandomException
      */
     public function whereIn(string $field, array $values, ?int $limit = null, ?int $offset = null): PaginatedResult
     {
