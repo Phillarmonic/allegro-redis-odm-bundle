@@ -377,7 +377,9 @@ class Article
 
 ### Handling Paginated Results and Iteration
 
-All finder methods that can return multiple documents (like findAll(), findBy(), and whereIn()) return a PaginatedResult object. This object contains the results for the current page and metadata for pagination.You can iterate over this object directly with foreach to get the hydrated documents for the current page.**Example: Iterating a single page of results**
+All finder methods that can return multiple documents (like findAll(), findBy(), and whereIn()) return a PaginatedResult object. This object contains the results for the current page and metadata for pagination.You can iterate over this object directly with foreach to get the hydrated documents for the current page.
+
+**Example: Iterating a single page of results**
 
 ```php
 $repository = $this->documentManager->getRepository(Article::class);
@@ -402,7 +404,10 @@ echo "Total Articles: " . $paginatedResult->getTotalCount() . "\n";
 echo "Total Pages: " . $paginatedResult->getTotalPages() . "\n";
 ```
 
-**Example: Iterating through ALL pages of a large result set**For processing a large number of documents, you should not load them all at once. Instead, loop through the pages. This is the most memory-efficient approach.
+**Example: Iterating through ALL pages of a large result set**
+
+For processing a large number of documents, you should not load them all at once. Instead, loop through the pages. This is the most memory-efficient approach.
+
 
 ```php
 $repository = $this->documentManager->getRepository(Article::class);
